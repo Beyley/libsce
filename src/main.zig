@@ -9,6 +9,8 @@ const system_keys = @import("system_keyset.zig");
 const CertifiedFile = @import("CertifiedFile.zig");
 const Self = @import("Self.zig");
 
+const Aes128 = std.crypto.core.aes.Aes128;
+
 pub fn main() !void {
     var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
     defer if (gpa.deinit() == .leak) @panic("memory leak");
@@ -20,8 +22,11 @@ pub fn main() !void {
 
     const self_path = args[1];
 
-    const self = try std.fs.cwd().openFile(self_path, .{});
-    defer self.close();
+    const self = try std.fs.cwd().readFileAlloc(allocator, self_path, std.math.maxInt(usize));
+    defer allocator.free(self);
+
+    var self_stream = std.io.fixedBufferStream(self);
+    const reader = self_stream.reader();
 
     const systemKeysJson = try std.fs.cwd().readFileAlloc(allocator, args[2], std.math.maxInt(usize));
     defer allocator.free(systemKeysJson);
@@ -35,23 +40,23 @@ pub fn main() !void {
     var npdrm_keyset = try npdrm_keys.read(allocator, npdrmKeysJson);
     defer npdrm_keyset.deinit();
 
-    const certified_file_header = try CertifiedFile.Header.read(self.reader());
+    const certified_file_header = try CertifiedFile.Header.read(reader);
 
     try pretty.print(allocator, certified_file_header, .{});
 
     if (certified_file_header.category != .signed_elf)
         return error.OnlySelfSupported;
 
-    const extended_header = try Self.ExtendedHeader.read(self.reader(), certified_file_header.endianness());
+    const extended_header = try Self.ExtendedHeader.read(reader, certified_file_header.endianness());
     try pretty.print(allocator, extended_header, .{});
 
-    try self.seekTo(extended_header.program_identification_header_offset);
-    const program_identification_header = try Self.ProgramIdentificationHeader.read(self.reader(), certified_file_header.endianness());
+    try self_stream.seekTo(extended_header.program_identification_header_offset);
+    const program_identification_header = try Self.ProgramIdentificationHeader.read(reader, certified_file_header.endianness());
 
     try pretty.print(allocator, program_identification_header, .{});
 
-    try self.seekTo(extended_header.supplemental_header_offset);
-    const supplemental_headers = try Self.SupplementalHeaderTable.read(allocator, self.reader(), extended_header, certified_file_header.endianness());
+    try self_stream.seekTo(extended_header.supplemental_header_offset);
+    const supplemental_headers = try Self.SupplementalHeaderTable.read(allocator, reader, extended_header, certified_file_header.endianness());
     defer allocator.free(supplemental_headers);
 
     try pretty.print(allocator, supplemental_headers, .{ .array_u8_is_str = true });
@@ -68,7 +73,7 @@ pub fn main() !void {
     try pretty.print(allocator, system_key, .{});
 
     // TODO: dont read the encryption root header for fSELF files
-    try self.seekTo(certified_file_header.byteSize() + certified_file_header.extended_header_size);
+    try self_stream.seekTo(certified_file_header.byteSize() + certified_file_header.extended_header_size);
     // We need to remove the NPDRM layer with npdrm applications
     const encryption_root_header = if (certified_file_header.category == .signed_elf and program_identification_header.program_type == .npdrm_application) erh: {
         const npdrm_header = blk: {
@@ -105,11 +110,26 @@ pub fn main() !void {
         _ = aes.aes_setkey_dec(&aes_ctxt, &klic_key.erk, @bitSizeOf(@TypeOf(klic_key.erk)));
         _ = aes.aes_crypt_ecb(&aes_ctxt, aes.AES_DECRYPT, &npdrm_key.erk, &npdrm_key.erk);
 
-        break :erh try CertifiedFile.EncryptionRootHeader.readNpdrm(self.reader(), npdrm_key, system_key);
-    } else try CertifiedFile.EncryptionRootHeader.read(self.reader(), system_key);
+        break :erh try CertifiedFile.EncryptionRootHeader.readNpdrm(reader, npdrm_key, system_key);
+    } else try CertifiedFile.EncryptionRootHeader.read(reader, system_key);
 
     try pretty.print(allocator, encryption_root_header, .{});
 
-    const certification_header = try CertifiedFile.CertificationHeader.read(self.reader(), encryption_root_header, certified_file_header.endianness());
+    const pos: usize = @intCast(try self_stream.getPos());
+    const len: usize = @intCast(certified_file_header.file_offset - (certified_file_header.byteSize() + certified_file_header.extended_header_size + encryption_root_header.byteSize()));
+    const data = self[pos .. pos + len];
+
+    // decrypt the certification header, segment certification header, and keys
+    const aes128 = Aes128.initEnc(encryption_root_header.key);
+    std.crypto.core.modes.ctr(@TypeOf(aes128), aes128, data, data, encryption_root_header.iv, certified_file_header.endianness());
+
+    const certification_header = try CertifiedFile.CertificationHeader.read(reader, certified_file_header.endianness());
     try pretty.print(allocator, certification_header, .{});
+
+    const segment_certification_headers = try allocator.alloc(CertifiedFile.SegmentCertificationHeader, certification_header.cert_entry_num);
+    defer allocator.free(segment_certification_headers);
+    for (segment_certification_headers) |*segment_certification_header| {
+        segment_certification_header.* = try CertifiedFile.SegmentCertificationHeader.read(reader, certified_file_header.endianness());
+    }
+    try pretty.print(allocator, segment_certification_headers, .{});
 }

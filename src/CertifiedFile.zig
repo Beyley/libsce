@@ -123,6 +123,11 @@ pub const EncryptionRootHeader = struct {
     iv: [0x10]u8,
     iv_pad: [0x10]u8,
 
+    pub fn byteSize(self: EncryptionRootHeader) usize {
+        _ = self;
+        return 0x10 * 4;
+    }
+
     pub fn readNpdrm(reader: anytype, npdrm_key: npdrm_keys.Key.AesKey, system_key: system_keys.Key) !EncryptionRootHeader {
         var header: [0x40]u8 = undefined;
         try reader.readNoEof(&header);
@@ -184,12 +189,10 @@ pub const CertificationHeader = struct {
     optional_header_size: u32,
     pad: u64,
 
-    pub fn read(reader: anytype, key: EncryptionRootHeader, endian: std.builtin.Endian) !CertificationHeader {
+    /// Reads a pre-decrypted certification header
+    pub fn read(reader: anytype, endian: std.builtin.Endian) !CertificationHeader {
         var header: [0x20]u8 = undefined;
         try reader.readNoEof(&header);
-
-        const aes128 = Aes128.initEnc(key.key);
-        std.crypto.core.modes.ctr(@TypeOf(aes128), aes128, &header, &header, key.iv, endian);
 
         return .{
             .sign_offset = std.mem.readInt(u64, header[0..0x08], endian),
@@ -198,6 +201,65 @@ pub const CertificationHeader = struct {
             .attr_entry_num = std.mem.readInt(u32, header[0x10..0x14], endian),
             .optional_header_size = std.mem.readInt(u32, header[0x14..0x18], endian),
             .pad = std.mem.readInt(u64, header[0x18..0x20], endian),
+        };
+    }
+};
+
+pub const SegmentCertificationHeader = struct {
+    pub const SegmentType = enum(u32) {
+        shdr = 1,
+        phdr = 2,
+        sceversion = 3,
+    };
+
+    pub const SigningAlgorithm = enum(u32) {
+        ecdsa160 = 1,
+        hmac_sha1 = 2,
+        sha1 = 3,
+        rsa2048 = 5,
+        hmac_sha256 = 6,
+    };
+
+    pub const EncryptionAlgorithm = enum(u32) {
+        none = 1,
+        aes128_cbc_cfb = 2,
+        aes128_ctr = 3,
+    };
+
+    pub const CompressionAlgorithm = enum(u32) {
+        plain = 1,
+        zlib = 2,
+    };
+
+    segment_offset: u64,
+    segment_size: u64,
+    segment_type: SegmentType,
+    segment_id: u32,
+    signing_algorithm: SigningAlgorithm,
+    signing_idx: u32,
+    encryption_algorithm: EncryptionAlgorithm,
+    key_idx: ?u32,
+    iv_idx: ?u32,
+    compression_algorithm: CompressionAlgorithm,
+
+    pub fn read(reader: anytype, endian: std.builtin.Endian) !SegmentCertificationHeader {
+        return .{
+            .segment_offset = try reader.readInt(u64, endian),
+            .segment_size = try reader.readInt(u64, endian),
+            .segment_type = try reader.readEnum(SegmentType, endian),
+            .segment_id = try reader.readInt(u32, endian),
+            .signing_algorithm = try reader.readEnum(SigningAlgorithm, endian),
+            .signing_idx = try reader.readInt(u32, endian),
+            .encryption_algorithm = try reader.readEnum(EncryptionAlgorithm, endian),
+            .key_idx = blk: {
+                const idx = try reader.readInt(u32, endian);
+                break :blk if (idx == 0xFFFFFFFF) null else idx;
+            },
+            .iv_idx = blk: {
+                const idx = try reader.readInt(u32, endian);
+                break :blk if (idx == 0xFFFFFFFF) null else idx;
+            },
+            .compression_algorithm = try reader.readEnum(CompressionAlgorithm, endian),
         };
     }
 };
