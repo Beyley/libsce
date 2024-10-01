@@ -55,9 +55,9 @@ const JsonKey = struct {
 pub const Key = struct {
     encryption_round_key: [0x20]u8,
     reset_initialization_vector: [0x10]u8,
-    public: [0x28]u8,
+    public: ?[0x28]u8,
     private: ?[0x15]u8,
-    curve_type: u32,
+    curve_type: ?u32,
 };
 
 pub const KeySetIndex = struct {

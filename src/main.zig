@@ -1,6 +1,8 @@
 const std = @import("std");
 const pretty = @import("pretty");
 
+const aes = @import("aes");
+
 const npdrm_keys = @import("npdrm_keyset.zig");
 const system_keys = @import("system_keyset.zig");
 
@@ -68,8 +70,42 @@ pub fn main() !void {
     // TODO: dont read the encryption root header for fSELF files
     try self.seekTo(certified_file_header.byteSize() + certified_file_header.extended_header_size);
     // We need to remove the NPDRM layer with npdrm applications
-    const encryption_root_header = if (certified_file_header.category == .signed_elf and program_identification_header.program_type == .npdrm_application) {
-        @panic("TODO");
+    const encryption_root_header = if (certified_file_header.category == .signed_elf and program_identification_header.program_type == .npdrm_application) erh: {
+        const npdrm_header = blk: {
+            for (supplemental_headers) |supplemental_header| {
+                if (supplemental_header == .ps3_npdrm)
+                    break :blk supplemental_header.ps3_npdrm;
+            }
+
+            return error.MissingNpdrmSupplementalHeader;
+        };
+
+        var aes_ctxt: aes.aes_context = undefined;
+
+        const klic_key = npdrm_keyset.get(.klic_key).?.aes;
+        var npdrm_key: npdrm_keys.Key.AesKey = blk: {
+            if (npdrm_header.drm_type == .free)
+                break :blk npdrm_keyset.get(.klic_free).?.aes
+            else if (npdrm_header.drm_type == .local) {
+                // TODO: RIF+act.dat+IDPS reading
+                var rap_file: [0x10]u8 = undefined;
+                if ((try std.fs.cwd().readFile(args[4], &rap_file)).len != rap_file.len)
+                    return error.InvalidRap;
+
+                break :blk .{
+                    .erk = npdrm_keys.rapToKlicensee(rap_file, npdrm_keyset),
+                    .riv = .{0} ** 0x10,
+                };
+            } else {
+                return error.UnableToFindNpdrmKey;
+            }
+        };
+
+        // Decrypt the npdrm key
+        _ = aes.aes_setkey_dec(&aes_ctxt, &klic_key.erk, @bitSizeOf(@TypeOf(klic_key.erk)));
+        _ = aes.aes_crypt_ecb(&aes_ctxt, aes.AES_DECRYPT, &npdrm_key.erk, &npdrm_key.erk);
+
+        break :erh try CertifiedFile.EncryptionRootHeader.readNpdrm(self.reader(), npdrm_key, system_key);
     } else try CertifiedFile.EncryptionRootHeader.read(self.reader(), system_key);
 
     try pretty.print(allocator, encryption_root_header, .{});

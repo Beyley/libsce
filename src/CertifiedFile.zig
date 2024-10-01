@@ -6,7 +6,7 @@ const npdrm_keys = @import("npdrm_keyset.zig");
 
 const Aes128 = std.crypto.core.aes.Aes128;
 
-const aes = @cImport(@cInclude("aes.h"));
+const aes = @import("aes");
 
 pub const Version = enum(u32) {
     ps3 = 2,
@@ -123,10 +123,32 @@ pub const EncryptionRootHeader = struct {
     iv: [0x10]u8,
     iv_pad: [0x10]u8,
 
-    pub fn readNpdrm(reader: anytype, key: npdrm_keys.NpdrmKey) !EncryptionRootHeader {
-        _ = reader; // autofix
-        _ = key; // autofix
-        @panic("TODO");
+    pub fn readNpdrm(reader: anytype, npdrm_key: npdrm_keys.Key.AesKey, system_key: system_keys.Key) !EncryptionRootHeader {
+        var header: [0x40]u8 = undefined;
+        try reader.readNoEof(&header);
+
+        var ctx: aes.aes_context = std.mem.zeroes(aes.aes_context);
+        var iv: [0x10]u8 = .{0} ** 0x10;
+        _ = aes.aes_setkey_dec(&ctx, &npdrm_key.erk, @bitSizeOf(@TypeOf(npdrm_key.erk)));
+        _ = aes.aes_crypt_cbc(&ctx, aes.AES_DECRYPT, header.len, &iv, &header, &header);
+
+        iv = system_key.reset_initialization_vector;
+        _ = aes.aes_setkey_dec(&ctx, &system_key.encryption_round_key, @bitSizeOf(@TypeOf(system_key.encryption_round_key)));
+        _ = aes.aes_crypt_cbc(&ctx, aes.AES_DECRYPT, header.len, &iv, &header, &header);
+
+        const ret: EncryptionRootHeader = .{
+            .key = header[0..0x10].*,
+            .key_pad = header[0x10..0x20].*,
+            .iv = header[0x20..0x30].*,
+            .iv_pad = header[0x30..0x40].*,
+        };
+
+        // Ensure padding is all zeroes
+        if (!std.mem.allEqual(u8, &ret.iv_pad, 0) or !std.mem.allEqual(u8, &ret.key_pad, 0)) {
+            return error.BadPadding;
+        }
+
+        return ret;
     }
 
     pub fn read(reader: anytype, key: system_keys.Key) !EncryptionRootHeader {
@@ -134,9 +156,8 @@ pub const EncryptionRootHeader = struct {
         try reader.readNoEof(&header);
 
         var ctx: aes.aes_context = std.mem.zeroes(aes.aes_context);
-        _ = aes.aes_setkey_dec(&ctx, &key.encryption_round_key, key.encryption_round_key.len * 8);
-
         var iv = key.reset_initialization_vector;
+        _ = aes.aes_setkey_dec(&ctx, &key.encryption_round_key, key.encryption_round_key.len * 8);
         _ = aes.aes_crypt_cbc(&ctx, aes.AES_DECRYPT, header.len, &iv, &header, &header);
 
         const ret: EncryptionRootHeader = .{
