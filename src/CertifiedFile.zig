@@ -393,7 +393,7 @@ pub fn read(
     const system_key = system_keys.get(.{
         .revision = header.key_revision,
         .self_type = self.program_identification_header.program_type,
-    }) orelse return error.MissingKey;
+    }) orelse return error.MissingSystemKey;
 
     // TODO: dont read the encryption root header for fSELF files
     try stream.seekTo(header.byteSize() + header.extended_header_size);
@@ -410,10 +410,10 @@ pub fn read(
 
         var aes_ctxt: aes.aes_context = undefined;
 
-        const klic_key = npdrm_keys.get(.klic_key).?.aes;
+        const klic_key = (npdrm_keys.get(.klic_key) orelse return error.MissingNpdrmKlicKey).aes;
         var npdrm_key: npdrm_keyset.Key.AesKey = blk: {
             if (npdrm_header.drm_type == .free)
-                break :blk npdrm_keys.get(.klic_free).?.aes
+                break :blk (npdrm_keys.get(.klic_free) orelse return error.MissingNpdrmKlicFreeKey).aes
             else if (npdrm_header.drm_type == .local) {
                 // TODO: RIF+act.dat+IDPS reading
                 var rap_file: [0x10]u8 = undefined;
@@ -421,7 +421,7 @@ pub fn read(
                     return error.InvalidRap;
 
                 break :blk .{
-                    .erk = npdrm_keyset.rapToKlicensee(rap_file, npdrm_keys),
+                    .erk = try npdrm_keyset.rapToKlicensee(rap_file, npdrm_keys),
                     .riv = .{0} ** 0x10,
                 };
             } else {
@@ -437,9 +437,13 @@ pub fn read(
     } else try EncryptionRootHeader.read(reader, system_key);
 
     { // Decrypt all bytes from now until the start of the file
-        const pos: usize = @intCast(try stream.getPos());
-        const len: usize = @intCast(header.file_offset - (header.byteSize() + header.extended_header_size + encryption_root_header.byteSize()));
-        const data = self_data[pos .. pos + len];
+        const pos = try stream.getPos();
+        const len = header.file_offset - (header.byteSize() + header.extended_header_size + encryption_root_header.byteSize());
+
+        if (pos > std.math.maxInt(usize) or len > std.math.maxInt(usize))
+            return error.InvalidPosOrSizeForPlatform;
+
+        const data = self_data[@intCast(pos)..@intCast(pos + len)];
 
         // decrypt the certification header, segment certification header, and keys
         const aes128 = Aes128.initEnc(encryption_root_header.key);
@@ -466,17 +470,25 @@ pub fn read(
 
     // decrypt data
 
-    for (segment_certification_headers, 0..) |segment_header, i| {
-        _ = i; // autofix
-        if (segment_header.encryption_algorithm != .none) blk: {
-            if (segment_header.key_idx == null or segment_header.iv_idx == null or segment_header.key_idx.? >= certification_header.attr_entry_num or segment_header.iv_idx.? >= certification_header.attr_entry_num) {
-                break :blk;
+    for (segment_certification_headers) |segment_header| {
+        if (segment_header.encryption_algorithm != .none) {
+            // Skip segments which are missing a key/iv
+            if (segment_header.key_idx == null or segment_header.iv_idx == null) {
+                continue;
             }
 
             const key_idx = segment_header.key_idx.?;
             const iv_idx = segment_header.iv_idx.?;
 
-            const data = self_data[segment_header.segment_offset .. segment_header.segment_offset + segment_header.segment_size];
+            // Skip segments with invalid key/iv
+            if (key_idx >= certification_header.attr_entry_num or iv_idx >= certification_header.attr_entry_num) {
+                continue;
+            }
+
+            if (segment_header.segment_offset > std.math.maxInt(usize) or segment_header.segment_size > std.math.maxInt(usize))
+                return error.InvalidPosOrSizeForPlatform;
+
+            const data = self_data[@intCast(segment_header.segment_offset)..@intCast(segment_header.segment_offset + segment_header.segment_size)];
 
             switch (segment_header.encryption_algorithm) {
                 .aes128_ctr => {

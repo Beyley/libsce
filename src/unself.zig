@@ -14,7 +14,10 @@ pub fn extractSelfToElf(
 
     const program_type = self.program_identification_header.program_type;
 
-    const elf_header_data: [@sizeOf(std.elf.Elf64_Ehdr)]u8 align(@alignOf(std.elf.Elf64_Ehdr)) = self_data[self.extended_header.elf_header_offset..][0..@sizeOf(std.elf.Elf64_Ehdr)].*;
+    if (self.extended_header.elf_header_offset > std.math.maxInt(usize))
+        return error.InvalidPosOrSizeForPlatform;
+
+    const elf_header_data: [@sizeOf(std.elf.Elf64_Ehdr)]u8 align(@alignOf(std.elf.Elf64_Ehdr)) = self_data[@intCast(self.extended_header.elf_header_offset)..][0..@sizeOf(std.elf.Elf64_Ehdr)].*;
 
     const elf_header = try std.elf.Header.parse(&elf_header_data);
     if (program_type == .secure_loader or program_type == .isolated_spu_module or !elf_header.is_64)
@@ -37,15 +40,22 @@ fn writeElfInternal(
 
     const writer = buffered_writer.writer();
 
-    const elf_header_data: [@sizeOf(std.elf.Elf64_Ehdr)]u8 align(@alignOf(std.elf.Elf64_Ehdr)) = self_data[extended_header.elf_header_offset..][0..@sizeOf(std.elf.Elf64_Ehdr)].*;
+    if (extended_header.elf_header_offset > std.math.maxInt(usize))
+        return error.InvalidPosOrSizeForPlatform;
+
+    const elf_header_data: [@sizeOf(std.elf.Elf64_Ehdr)]u8 align(@alignOf(std.elf.Elf64_Ehdr)) = self_data[@intCast(extended_header.elf_header_offset)..][0..@sizeOf(std.elf.Elf64_Ehdr)].*;
 
     const elf_header = try std.elf.Header.parse(&elf_header_data);
 
     // Write the elf header
     try writer.writeAll(elf_header_data[0..@sizeOf(std.elf.Elf32_Ehdr)]);
 
+    const program_headers_end = extended_header.program_header_offset + @sizeOf(PhdrType) * elf_header.phnum;
+    if (extended_header.program_header_offset > std.math.maxInt(usize) or program_headers_end > std.math.maxInt(usize))
+        return error.InvalidPosOrSizeForPlatform;
+
     // Write the program headers
-    const program_headers_data = self_data[extended_header.program_header_offset .. extended_header.program_header_offset + @sizeOf(PhdrType) * elf_header.phnum];
+    const program_headers_data = self_data[@intCast(extended_header.program_header_offset)..@intCast(program_headers_end)];
     try writer.writeAll(program_headers_data);
 
     const program_headers = std.mem.bytesAsSlice(PhdrType, program_headers_data);
@@ -57,7 +67,10 @@ fn writeElfInternal(
             try buffered_writer.flush();
             try output_stream.seekTo(@byteSwap(program_headers[segment_header.segment_id].p_offset));
 
-            const program_data = self_data[segment_header.segment_offset .. segment_header.segment_offset + segment_header.segment_size];
+            if (segment_header.segment_offset > std.math.maxInt(usize) or segment_header.segment_size > std.math.maxInt(usize))
+                return error.InvalidPosOrSizeForPlatform;
+
+            const program_data = self_data[@intCast(segment_header.segment_offset)..@intCast(segment_header.segment_offset + segment_header.segment_size)];
             var program_data_stream = std.io.fixedBufferStream(program_data);
 
             switch (segment_header.compression_algorithm) {
@@ -73,8 +86,13 @@ fn writeElfInternal(
         // Flush before seeking
         try buffered_writer.flush();
         try output_stream.seekTo(elf_header.shoff);
+
+        const section_header_end = extended_header.section_header_offset + elf_header.shnum * @sizeOf(ShdrType);
+        if (extended_header.section_header_offset > std.math.maxInt(usize) or section_header_end > std.math.maxInt(usize))
+            return error.InvalidPosOrSizeForPlatform;
+
         // Write the section headers to the ELf
-        try writer.writeAll(self_data[extended_header.section_header_offset .. extended_header.section_header_offset + elf_header.shnum * @sizeOf(ShdrType)]);
+        try writer.writeAll(self_data[@intCast(extended_header.section_header_offset)..@intCast(section_header_end)]);
     }
 
     try buffered_writer.flush();

@@ -21,7 +21,7 @@ pub fn read(allocator: std.mem.Allocator, json: []const u8) !KeySet {
             return error.BadResetInitializationVector;
         if ((try std.fmt.hexToBytes(&public, &key.public)).len != public.len)
             return error.BadPublic;
-        if (key.private != null and (try std.fmt.hexToBytes(&private, &key.private.?)).len != private.len)
+        if (key.private) |private_key| if ((try std.fmt.hexToBytes(&private, &private_key)).len != private.len)
             return error.BadPrivate;
 
         try keyset.put(
