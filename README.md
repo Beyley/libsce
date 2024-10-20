@@ -10,5 +10,6 @@ A library to decrypt, decompress, and disassemble files used by various Sony sys
 
 - [ ] RIF + act.dat + IDPS support for decrypting digital copies
 - [ ] fSELF support
+- [ ] Remove `unreachable`/`panic` from as many places as possible
 - [ ] Make a C interface for creating and unpacking SELF files
 - [ ] Write an scetool-esque CLI tool for creating and unpacking SELF files
