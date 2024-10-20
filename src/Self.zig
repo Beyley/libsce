@@ -2,6 +2,7 @@ const std = @import("std");
 
 const sce = @import("sce.zig");
 
+/// aka self header
 pub const ExtendedHeader = struct {
     pub const Version = enum(u64) {
         ps3 = 3,
@@ -68,6 +69,7 @@ pub const ExtendedHeader = struct {
     }
 };
 
+/// aka application info/app info
 pub const ProgramIdentificationHeader = struct {
     pub const ProgramAuthorityId = packed struct(u64) {
         pub const ConsoleGeneration = enum(u4) {

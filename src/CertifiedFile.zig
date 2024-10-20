@@ -186,7 +186,7 @@ pub const EncryptionRootHeader = struct {
     }
 };
 
-/// aka metadata haeder
+/// aka metadata header
 pub const CertificationHeader = struct {
     sign_offset: u64,
     sign_algorithm: SigningAlgorithm,
