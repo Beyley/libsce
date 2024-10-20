@@ -41,22 +41,23 @@ pub fn main() !void {
     defer npdrm_keyset.deinit();
 
     const certified_file_header = try CertifiedFile.Header.read(reader);
+    const endianness = certified_file_header.endianness();
 
     try pretty.print(allocator, certified_file_header, .{});
 
     if (certified_file_header.category != .signed_elf)
         return error.OnlySelfSupported;
 
-    const extended_header = try Self.ExtendedHeader.read(reader, certified_file_header.endianness());
+    const extended_header = try Self.ExtendedHeader.read(reader, endianness);
     try pretty.print(allocator, extended_header, .{});
 
     try self_stream.seekTo(extended_header.program_identification_header_offset);
-    const program_identification_header = try Self.ProgramIdentificationHeader.read(reader, certified_file_header.endianness());
+    const program_identification_header = try Self.ProgramIdentificationHeader.read(reader, endianness);
 
     try pretty.print(allocator, program_identification_header, .{});
 
     try self_stream.seekTo(extended_header.supplemental_header_offset);
-    const supplemental_headers = try Self.SupplementalHeaderTable.read(allocator, reader, extended_header, certified_file_header.endianness());
+    const supplemental_headers = try Self.SupplementalHeaderTable.read(allocator, reader, extended_header, endianness);
     defer allocator.free(supplemental_headers);
 
     try pretty.print(allocator, supplemental_headers, .{ .array_u8_is_str = true });
@@ -121,15 +122,12 @@ pub fn main() !void {
 
     // decrypt the certification header, segment certification header, and keys
     const aes128 = Aes128.initEnc(encryption_root_header.key);
-    std.crypto.core.modes.ctr(@TypeOf(aes128), aes128, data, data, encryption_root_header.iv, certified_file_header.endianness());
+    std.crypto.core.modes.ctr(@TypeOf(aes128), aes128, data, data, encryption_root_header.iv, endianness);
 
-    const certification_header = try CertifiedFile.CertificationHeader.read(reader, certified_file_header.endianness());
+    const certification_header = try CertifiedFile.CertificationHeader.read(reader, endianness);
     try pretty.print(allocator, certification_header, .{});
 
-    const segment_certification_headers = try allocator.alloc(CertifiedFile.SegmentCertificationHeader, certification_header.cert_entry_num);
+    const segment_certification_headers = try CertifiedFile.SegmentCertificationHeader.read(reader, allocator, certification_header, endianness);
     defer allocator.free(segment_certification_headers);
-    for (segment_certification_headers) |*segment_certification_header| {
-        segment_certification_header.* = try CertifiedFile.SegmentCertificationHeader.read(reader, certified_file_header.endianness());
-    }
     try pretty.print(allocator, segment_certification_headers, .{});
 }

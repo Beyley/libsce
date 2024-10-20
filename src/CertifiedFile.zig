@@ -253,7 +253,18 @@ pub const SegmentCertificationHeader = struct {
         return 0x30;
     }
 
-    pub fn read(reader: anytype, endian: std.builtin.Endian) !SegmentCertificationHeader {
+    pub fn read(reader: anytype, allocator: std.mem.Allocator, certifiction_header: CertificationHeader, endian: std.builtin.Endian) ![]SegmentCertificationHeader {
+        const headers = try allocator.alloc(SegmentCertificationHeader, certifiction_header.cert_entry_num);
+        errdefer allocator.free(headers);
+
+        for (headers) |*header| {
+            header.* = try readSingle(reader, endian);
+        }
+
+        return headers;
+    }
+
+    pub fn readSingle(reader: anytype, endian: std.builtin.Endian) !SegmentCertificationHeader {
         return .{
             .segment_offset = try reader.readInt(u64, endian),
             .segment_size = try reader.readInt(u64, endian),
