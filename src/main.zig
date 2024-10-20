@@ -146,4 +146,8 @@ pub fn main() !void {
     const optional_headers = try CertifiedFile.OptionalHeader.read(reader, allocator, certification_header, endianness);
     defer allocator.free(optional_headers);
     try pretty.print(allocator, optional_headers, .{});
+
+    const signature = try CertifiedFile.Signature.read(reader, certification_header);
+    std.debug.print("signature: ", .{});
+    try pretty.print(allocator, signature, .{});
 }

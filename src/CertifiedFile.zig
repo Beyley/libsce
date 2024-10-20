@@ -345,3 +345,19 @@ pub const OptionalHeader = union(OptionalHeaderType) {
         return optional_headers.toOwnedSlice();
     }
 };
+
+pub const Signature = union(SigningAlgorithm) {
+    ecdsa160: sce.Ecdsa160Signature,
+    hmac_sha1: void,
+    sha1: void,
+    rsa2048: sce.Rsa2048Signature,
+    hmac_sha256: void,
+
+    pub fn read(reader: anytype, certification_header: CertificationHeader) !Signature {
+        return switch (certification_header.sign_algorithm) {
+            .ecdsa160 => .{ .ecdsa160 = try sce.Ecdsa160Signature.read(reader) },
+            .rsa2048 => .{ .rsa2048 = try sce.Rsa2048Signature.read(reader) },
+            else => error.UnsupportedSignatureType, // https://www.psdevwiki.com/ps3/Certified_File#Signature
+        };
+    }
+};

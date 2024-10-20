@@ -24,6 +24,35 @@ pub const Ecdsa224Signature = struct {
     }
 };
 
+pub const Ecdsa160Signature = struct {
+    r: [0x15]u8,
+    s: [0x15]u8,
+    padding: [0x06]u8,
+
+    pub fn read(reader: anytype) !Ecdsa160Signature {
+        const signature = .{
+            .r = try reader.readBytesNoEof(0x15),
+            .s = try reader.readBytesNoEof(0x15),
+            .padding = try reader.readBytesNoEof(0x06),
+        };
+
+        if (!std.mem.allEqual(u8, &signature.padding, 0))
+            return error.InvalidEcdsa160SignaturePadding;
+
+        return signature;
+    }
+};
+
+pub const Rsa2048Signature = struct {
+    rsa: [0x100]u8,
+
+    pub fn read(reader: anytype) !Rsa2048Signature {
+        return .{
+            .rsa = try reader.readBytesNoEof(0x100),
+        };
+    }
+};
+
 pub const SharedSecret = struct {
     shared_secret_0: [0x10]u8,
     klicensee: [0x10]u8,
