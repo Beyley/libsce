@@ -370,7 +370,7 @@ pub fn read(
     allocator: std.mem.Allocator,
     self_data: []u8,
     stream: anytype,
-    rap_path: []const u8,
+    rap_path: ?[]const u8,
     system_keys: system_keyset.KeySet,
     npdrm_keys: npdrm_keyset.KeySet,
 ) !CertifiedFile {
@@ -417,7 +417,7 @@ pub fn read(
             else if (npdrm_header.drm_type == .local) {
                 // TODO: RIF+act.dat+IDPS reading
                 var rap_file: [0x10]u8 = undefined;
-                if ((try std.fs.cwd().readFile(rap_path, &rap_file)).len != rap_file.len)
+                if ((try std.fs.cwd().readFile(rap_path orelse return error.MissingRap, &rap_file)).len != rap_file.len)
                     return error.InvalidRap;
 
                 break :blk .{

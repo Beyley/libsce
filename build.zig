@@ -101,6 +101,7 @@ fn createSelftool(
     selftool.root_module.addImport("aes", &aes.root_module);
 
     selftool.root_module.addImport("pretty", b.dependency("pretty", .{ .target = target, .optimize = optimize }).module("pretty"));
+    selftool.root_module.addImport("cova", b.dependency("cova", .{ .target = target, .optimize = optimize }).module("cova"));
 
     return selftool;
 }

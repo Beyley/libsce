@@ -7,6 +7,10 @@
             .url = "git+https://github.com/timfayz/pretty#6fbc0d45b7d397b67db0b0af8f2e2000036f977f",
             .hash = "12209290db27d058b481801cf9a79c706fb0c482e7f6378d50495750aae19524d4b7",
         },
+        .cova = .{
+            .url = "git+https://github.com/Beyley/cova#e749b3551ade8d82a17477337c1902bdeed6f014",
+            .hash = "12205af19f0a80248621b2fd75e8506dbda0c84a65f61c54f2e5a645942d40d04561",
+        },
     },
     .paths = .{
         "build.zig",
