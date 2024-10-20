@@ -4,6 +4,12 @@ const sce = @import("sce.zig");
 
 const Self = @This();
 
+pub const Error = error{
+    BadPs3ElfDigestSize,
+    BadNpdrmMagic,
+    BadVitaNpdrmMagic,
+} || std.fs.File.Reader.ReadEnumError || std.mem.Allocator.Error || sce.Error;
+
 /// aka self header
 pub const ExtendedHeader = struct {
     pub const Version = enum(u64) {
@@ -55,7 +61,7 @@ pub const ExtendedHeader = struct {
         return 0x50;
     }
 
-    pub fn read(reader: anytype, endian: std.builtin.Endian) !ExtendedHeader {
+    pub fn read(reader: anytype, endian: std.builtin.Endian) Error!ExtendedHeader {
         return .{
             .extended_header_version = try reader.readEnum(Version, endian),
             .program_identification_header_offset = try reader.readInt(u64, endian),
@@ -150,7 +156,7 @@ pub const ProgramIdentificationHeader = struct {
     program_sceversion: u64,
     padding: u64,
 
-    pub fn read(reader: anytype, endian: std.builtin.Endian) !ProgramIdentificationHeader {
+    pub fn read(reader: anytype, endian: std.builtin.Endian) Error!ProgramIdentificationHeader {
         return .{
             .program_authority_id = @bitCast(try reader.readInt(u64, endian)),
             .program_vender_id = @bitCast(try reader.readInt(u32, endian)),
@@ -188,7 +194,7 @@ pub const SupplementalHeaderTable = struct {
             small: Small,
             large: Large,
 
-            pub fn read(reader: anytype, endian: std.builtin.Endian, size: usize) !Ps3ElfDigest {
+            pub fn read(reader: anytype, endian: std.builtin.Endian, size: usize) Error!Ps3ElfDigest {
                 return switch (size) {
                     0x30 => .{ .small = .{
                         .constant_or_elf_digsest = try reader.readBytesNoEof(0x14),
@@ -199,7 +205,7 @@ pub const SupplementalHeaderTable = struct {
                         .elf_digest = try reader.readBytesNoEof(0x14),
                         .required_system_version = try reader.readInt(u64, endian),
                     } },
-                    else => return error.BadPs3ElfDigestSize,
+                    else => return Error.BadPs3ElfDigestSize,
                 };
             }
         };
@@ -223,9 +229,9 @@ pub const SupplementalHeaderTable = struct {
             limited_time_start: u64,
             limited_time_end: u64,
 
-            pub fn read(reader: anytype, endian: std.builtin.Endian) !Ps3Npdrm {
+            pub fn read(reader: anytype, endian: std.builtin.Endian) Error!Ps3Npdrm {
                 if (!std.mem.eql(u8, &(try reader.readBytesNoEof(4)), "NPD\x00"))
-                    return error.BadNpdMagic;
+                    return Error.BadNpdrmMagic;
 
                 return .{
                     .version = try reader.readInt(u32, endian),
@@ -246,7 +252,7 @@ pub const SupplementalHeaderTable = struct {
             padding: u64,
             min_required_fw: u32,
 
-            pub fn read(reader: anytype, endian: std.builtin.Endian) !VitaElfDigest {
+            pub fn read(reader: anytype, endian: std.builtin.Endian) Error!VitaElfDigest {
                 return .{
                     .constant = try reader.readBytesNoEof(0x14),
                     .elf_digest = try reader.readBytesNoEof(0x20),
@@ -264,9 +270,9 @@ pub const SupplementalHeaderTable = struct {
             padding_78: [0x78]u8,
             sig: sce.Ecdsa224Signature,
 
-            pub fn read(reader: anytype, endian: std.builtin.Endian) !VitaNpdrm {
+            pub fn read(reader: anytype, endian: std.builtin.Endian) Error!VitaNpdrm {
                 if (!std.mem.eql(u8, &(try reader.readBytesNoEof(4)), "\x7FDRM"))
-                    return error.BadVitaNpdrmMagic;
+                    return Error.BadVitaNpdrmMagic;
 
                 return .{
                     .finaled_flag = try reader.readInt(u32, endian),
@@ -282,7 +288,7 @@ pub const SupplementalHeaderTable = struct {
         pub const VitaBootParam = struct {
             boot_param: [0x100]u8,
 
-            pub fn read(reader: anytype) !VitaBootParam {
+            pub fn read(reader: anytype) Error!VitaBootParam {
                 return .{
                     .boot_param = try reader.readBytesNoEof(0x100),
                 };
@@ -298,7 +304,7 @@ pub const SupplementalHeaderTable = struct {
         vita_shared_secret: sce.SharedSecret,
     };
 
-    pub fn read(allocator: std.mem.Allocator, raw_reader: anytype, extended_header: ExtendedHeader, endian: std.builtin.Endian) ![]SupplementalHeader {
+    pub fn read(allocator: std.mem.Allocator, raw_reader: anytype, extended_header: ExtendedHeader, endian: std.builtin.Endian) Error![]SupplementalHeader {
         var headers = std.ArrayList(SupplementalHeader).init(allocator);
 
         var counting_reader = std.io.countingReader(raw_reader);
@@ -334,7 +340,7 @@ pub const SupplementalHeaderTable = struct {
     }
 };
 
-pub fn read(stream: anytype, allocator: std.mem.Allocator, endianness: std.builtin.Endian) !Self {
+pub fn read(stream: anytype, allocator: std.mem.Allocator, endianness: std.builtin.Endian) Error!Self {
     const reader = stream.reader();
 
     const extended_header = try Self.ExtendedHeader.read(reader, endianness);

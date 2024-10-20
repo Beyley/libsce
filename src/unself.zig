@@ -1,16 +1,24 @@
 const std = @import("std");
 
 const sce = @import("sce.zig");
-const CertifiedFile = sce.CertifiedFile;
+const certified_file = sce.CertifiedFile;
+const CertifiedFile = sce.CertifiedFile.CertifiedFile;
 const Self = sce.Self;
+
+pub const Error = error{
+    InvalidElfClass,
+    InvalidElfEndian,
+    InvalidElfMagic,
+    InvalidElfVersion,
+} || std.fs.File.WriteError || std.fs.File.SeekError || std.compress.zlib.Decompressor(std.fs.File.Reader).Error;
 
 pub fn extractSelfToElf(
     self_data: []u8,
-    certified_file: CertifiedFile,
+    full_certified_file: CertifiedFile.Full,
     output_stream: anytype,
     output_writer: anytype,
-) !void {
-    const self = certified_file.contents.signed_elf;
+) Error!void {
+    const self = full_certified_file.contents.signed_elf;
 
     const program_type = self.program_identification_header.program_type;
 
@@ -21,19 +29,19 @@ pub fn extractSelfToElf(
 
     const elf_header = try std.elf.Header.parse(&elf_header_data);
     if (program_type == .secure_loader or program_type == .isolated_spu_module or !elf_header.is_64)
-        try writeElfInternal(self_data, false, self.extended_header, certified_file.segment_certification_headers, output_stream, output_writer)
+        try writeElfInternal(self_data, false, self.extended_header, full_certified_file.segment_certification_headers, output_stream, output_writer)
     else
-        try writeElfInternal(self_data, true, self.extended_header, certified_file.segment_certification_headers, output_stream, output_writer);
+        try writeElfInternal(self_data, true, self.extended_header, full_certified_file.segment_certification_headers, output_stream, output_writer);
 }
 
 fn writeElfInternal(
     self_data: []u8,
     comptime is_64_bit: bool,
     extended_header: Self.ExtendedHeader,
-    segment_certification_headers: []const CertifiedFile.SegmentCertificationHeader,
+    segment_certification_headers: []const certified_file.SegmentCertificationHeader,
     output_stream: anytype,
     output_writer: anytype,
-) !void {
+) Error!void {
     const PhdrType, const ShdrType = if (is_64_bit) .{ std.elf.Elf64_Phdr, std.elf.Elf64_Shdr } else .{ std.elf.Elf32_Phdr, std.elf.Elf32_Shdr };
 
     var buffered_writer = std.io.bufferedWriter(output_writer);

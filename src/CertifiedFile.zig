@@ -8,9 +8,24 @@ const npdrm_keyset = @import("npdrm_keyset.zig");
 
 const Self = @import("Self.zig");
 
-const CertifiedFile = @This();
-
 const Aes128 = std.crypto.core.aes.Aes128;
+
+pub const Error = error{
+    InvalidCertifiedFileMagic,
+    OnlySelfSupported,
+    FakeSelfUnsupported,
+    MissingNpdrmSupplementalHeader,
+    MissingNpdrmKlicKey,
+    MissingNpdrmKlicFreeKey,
+    MissingRap,
+    InvalidRap,
+    UnableToFindNpdrmKey,
+    OptionalHeaderSizeMismatch,
+    OptionalHeaderTableSizeMismatch,
+    UnsupportedSignatureType,
+    UnsupportedAes128CbcCfbSegment,
+    InvalidEncryptionRootHeaderPadding,
+} || std.fs.File.Reader.ReadEnumError || std.fs.File.OpenError || Self.Error || npdrm_keyset.Error;
 
 pub const Version = enum(u32) {
     ps3 = 2,
@@ -89,7 +104,7 @@ pub const Header = struct {
         };
     }
 
-    pub fn read(reader: anytype) !Header {
+    pub fn read(reader: anytype) Error!Header {
         const endian: std.builtin.Endian = blk: {
             var magic: [4]u8 = undefined;
             try reader.readNoEof(&magic);
@@ -99,7 +114,7 @@ pub const Header = struct {
             else if (std.mem.eql(u8, &magic, "\x00ECS"))
                 .little
             else
-                return error.InvalidMagic;
+                return Error.InvalidCertifiedFileMagic;
         };
 
         const version = try reader.readEnum(Version, endian);
@@ -132,7 +147,7 @@ pub const EncryptionRootHeader = struct {
         return 0x10 * 4;
     }
 
-    pub fn readNpdrm(reader: anytype, npdrm_key: npdrm_keyset.Key.AesKey, system_key: system_keyset.Key) !EncryptionRootHeader {
+    pub fn readNpdrm(reader: anytype, npdrm_key: npdrm_keyset.Key.AesKey, system_key: system_keyset.Key) Error!EncryptionRootHeader {
         var header: [0x40]u8 = undefined;
         try reader.readNoEof(&header);
 
@@ -157,13 +172,13 @@ pub const EncryptionRootHeader = struct {
 
         // Ensure padding is all zeroes
         if (!std.mem.allEqual(u8, &ret.iv_pad, 0) or !std.mem.allEqual(u8, &ret.key_pad, 0)) {
-            return error.BadPadding;
+            return Error.InvalidEncryptionRootHeaderPadding;
         }
 
         return ret;
     }
 
-    pub fn read(reader: anytype, key: system_keyset.Key) !EncryptionRootHeader {
+    pub fn read(reader: anytype, key: system_keyset.Key) Error!EncryptionRootHeader {
         var header: [0x40]u8 = undefined;
         try reader.readNoEof(&header);
 
@@ -183,7 +198,7 @@ pub const EncryptionRootHeader = struct {
 
         // Ensure padding is all zeroes
         if (!std.mem.allEqual(u8, &ret.iv_pad, 0) or !std.mem.allEqual(u8, &ret.key_pad, 0)) {
-            return error.BadPadding;
+            return Error.InvalidEncryptionRootHeaderPadding;
         }
 
         return ret;
@@ -200,7 +215,7 @@ pub const CertificationHeader = struct {
     pad: u64,
 
     /// Reads a pre-decrypted certification header
-    pub fn read(reader: anytype, endian: std.builtin.Endian) !CertificationHeader {
+    pub fn read(reader: anytype, endian: std.builtin.Endian) Error!CertificationHeader {
         var header: [0x20]u8 = undefined;
         try reader.readNoEof(&header);
 
@@ -259,7 +274,7 @@ pub const SegmentCertificationHeader = struct {
         return 0x30;
     }
 
-    pub fn read(reader: anytype, allocator: std.mem.Allocator, certifiction_header: CertificationHeader, endian: std.builtin.Endian) ![]SegmentCertificationHeader {
+    pub fn read(reader: anytype, allocator: std.mem.Allocator, certifiction_header: CertificationHeader, endian: std.builtin.Endian) Error![]SegmentCertificationHeader {
         const headers = try allocator.alloc(SegmentCertificationHeader, certifiction_header.cert_entry_num);
         errdefer allocator.free(headers);
 
@@ -270,7 +285,7 @@ pub const SegmentCertificationHeader = struct {
         return headers;
     }
 
-    pub fn readSingle(reader: anytype, endian: std.builtin.Endian) !SegmentCertificationHeader {
+    pub fn readSingle(reader: anytype, endian: std.builtin.Endian) Error!SegmentCertificationHeader {
         return .{
             .segment_offset = try reader.readInt(u64, endian),
             .segment_size = try reader.readInt(u64, endian),
@@ -306,7 +321,7 @@ pub const OptionalHeader = union(OptionalHeaderType) {
     pub const IndividualSeed = [0x100]u8;
     pub const Attribute = [0x20]u8;
 
-    pub fn read(raw_reader: anytype, allocator: std.mem.Allocator, certifiction_header: CertificationHeader, endian: std.builtin.Endian) ![]OptionalHeader {
+    pub fn read(raw_reader: anytype, allocator: std.mem.Allocator, certifiction_header: CertificationHeader, endian: std.builtin.Endian) Error![]OptionalHeader {
         if (certifiction_header.optional_header_size == 0)
             return &.{};
 
@@ -338,13 +353,13 @@ pub const OptionalHeader = union(OptionalHeaderType) {
             total_read += counting_reader.bytes_read;
 
             if (counting_reader.bytes_read - read_start != size)
-                return error.OptionalHeaderSizeMismatch;
+                return Error.OptionalHeaderSizeMismatch;
 
             if (!next) break;
         }
 
         if (total_read != certifiction_header.optional_header_size)
-            return error.OptionalHeaderTableSizeMismatch;
+            return Error.OptionalHeaderTableSizeMismatch;
 
         return optional_headers.toOwnedSlice();
     }
@@ -357,43 +372,51 @@ pub const Signature = union(SigningAlgorithm) {
     rsa2048: sce.Rsa2048Signature,
     hmac_sha256: void,
 
-    pub fn read(reader: anytype, certification_header: CertificationHeader) !Signature {
+    pub fn read(reader: anytype, certification_header: CertificationHeader) Error!Signature {
         return switch (certification_header.sign_algorithm) {
             .ecdsa160 => .{ .ecdsa160 = try sce.Ecdsa160Signature.read(reader) },
             .rsa2048 => .{ .rsa2048 = try sce.Rsa2048Signature.read(reader) },
-            else => error.UnsupportedSignatureType, // https://www.psdevwiki.com/ps3/Certified_File#Signature
+            else => Error.UnsupportedSignatureType, // https://www.psdevwiki.com/ps3/Certified_File#Signature
         };
     }
 };
 
+pub fn readHeader(reader: anytype) Error!Header {
+    return Header.read(reader);
+}
+
 pub fn read(
     allocator: std.mem.Allocator,
     self_data: []u8,
-    stream: anytype,
     rap_path: ?[]const u8,
     system_keys: system_keyset.KeySet,
     npdrm_keys: npdrm_keyset.KeySet,
-) !CertifiedFile {
+) Error!CertifiedFile {
+    var stream = std.io.fixedBufferStream(self_data);
+
     const reader = stream.reader();
 
-    const header = try Header.read(reader);
+    const header = try readHeader(reader);
     const endianness = header.endianness();
 
     // TODO: non-SELF file extraction
     if (header.category != .signed_elf)
-        return error.OnlySelfSupported;
+        return Error.OnlySelfSupported;
 
     // TODO: fSELF file extraction
     if (header.key_revision == 0x8000)
-        return error.FselfUnsupported;
+        return Error.FakeSelfUnsupported;
 
-    const self = try Self.read(stream, allocator, endianness);
+    const self = try Self.read(&stream, allocator, endianness);
     errdefer self.deinit(allocator);
 
     const system_key = system_keys.get(.{
         .revision = header.key_revision,
         .self_type = self.program_identification_header.program_type,
-    }) orelse return error.MissingSystemKey;
+    }) orelse return .{ .missing_system_key = .{
+        .header = header,
+        .contents = .{ .signed_elf = self },
+    } };
 
     // TODO: dont read the encryption root header for fSELF files
     try stream.seekTo(header.byteSize() + header.extended_header_size);
@@ -405,27 +428,27 @@ pub fn read(
                     break :blk supplemental_header.ps3_npdrm;
             }
 
-            return error.MissingNpdrmSupplementalHeader;
+            return Error.MissingNpdrmSupplementalHeader;
         };
 
         var aes_ctxt: aes.aes_context = undefined;
 
-        const klic_key = (npdrm_keys.get(.klic_key) orelse return error.MissingNpdrmKlicKey).aes;
+        const klic_key = (npdrm_keys.get(.klic_key) orelse return Error.MissingNpdrmKlicKey).aes;
         var npdrm_key: npdrm_keyset.Key.AesKey = blk: {
             if (npdrm_header.drm_type == .free)
-                break :blk (npdrm_keys.get(.klic_free) orelse return error.MissingNpdrmKlicFreeKey).aes
+                break :blk (npdrm_keys.get(.klic_free) orelse return Error.MissingNpdrmKlicFreeKey).aes
             else if (npdrm_header.drm_type == .local) {
                 // TODO: RIF+act.dat+IDPS reading
                 var rap_file: [0x10]u8 = undefined;
-                if ((try std.fs.cwd().readFile(rap_path orelse return error.MissingRap, &rap_file)).len != rap_file.len)
-                    return error.InvalidRap;
+                if ((try std.fs.cwd().readFile(rap_path orelse return Error.MissingRap, &rap_file)).len != rap_file.len)
+                    return Error.InvalidRap;
 
                 break :blk .{
                     .erk = try npdrm_keyset.rapToKlicensee(rap_file, npdrm_keys),
                     .riv = .{0} ** 0x10,
                 };
             } else {
-                return error.UnableToFindNpdrmKey;
+                return Error.UnableToFindNpdrmKey;
             }
         };
 
@@ -441,7 +464,7 @@ pub fn read(
         const len = header.file_offset - (header.byteSize() + header.extended_header_size + encryption_root_header.byteSize());
 
         if (pos > std.math.maxInt(usize) or len > std.math.maxInt(usize))
-            return error.InvalidPosOrSizeForPlatform;
+            return Error.InvalidPosOrSizeForPlatform;
 
         const data = self_data[@intCast(pos)..@intCast(pos + len)];
 
@@ -486,7 +509,7 @@ pub fn read(
             }
 
             if (segment_header.segment_offset > std.math.maxInt(usize) or segment_header.segment_size > std.math.maxInt(usize))
-                return error.InvalidPosOrSizeForPlatform;
+                return Error.InvalidPosOrSizeForPlatform;
 
             const data = self_data[@intCast(segment_header.segment_offset)..@intCast(segment_header.segment_offset + segment_header.segment_size)];
 
@@ -497,7 +520,7 @@ pub fn read(
                 },
                 .aes128_cbc_cfb => {
                     // TODO: lets throw an error so we can hopefully find one of these cbc_cfb SELFs in the wild, and implement support!
-                    return error.TodoAes128CbcCfb;
+                    return Error.UnsupportedAes128CbcCfbSegment;
                 },
                 .none => unreachable,
             }
@@ -505,27 +528,58 @@ pub fn read(
     }
 
     return .{
-        .header = header,
-        .encryption_root_header = encryption_root_header,
-        .certification_header = certification_header,
-        .segment_certification_headers = segment_certification_headers,
-        .keys = keys,
-        .optional_headers = optional_headers,
-        .signature = signature,
-        .contents = .{
-            .signed_elf = self,
+        .full = .{
+            .header = header,
+            .encryption_root_header = encryption_root_header,
+            .certification_header = certification_header,
+            .segment_certification_headers = segment_certification_headers,
+            .keys = keys,
+            .optional_headers = optional_headers,
+            .signature = signature,
+            .contents = .{
+                .signed_elf = self,
+            },
         },
     };
 }
 
-header: Header,
-encryption_root_header: EncryptionRootHeader,
-certification_header: CertificationHeader,
-segment_certification_headers: []const SegmentCertificationHeader,
-keys: []const [0x10]u8,
-optional_headers: []const OptionalHeader,
-signature: Signature,
-contents: Contents,
+pub const CertifiedFile = union(enum) {
+    /// The full read Certified File
+    pub const Full = struct {
+        header: Header,
+        encryption_root_header: EncryptionRootHeader,
+        certification_header: CertificationHeader,
+        segment_certification_headers: []const SegmentCertificationHeader,
+        keys: []const [0x10]u8,
+        optional_headers: []const OptionalHeader,
+        signature: Signature,
+        contents: Contents,
+    };
+
+    /// A partially read certified file, returned when a key is missing
+    pub const MissingKey = struct {
+        header: Header,
+        contents: Contents,
+    };
+
+    full: Full,
+    missing_system_key: MissingKey,
+    missing_npdrm_key: MissingKey,
+
+    pub fn deinit(self: CertifiedFile, allocator: std.mem.Allocator) void {
+        switch (self) {
+            .full => |full| {
+                full.contents.deinit(allocator);
+                allocator.free(full.segment_certification_headers);
+                allocator.free(full.optional_headers);
+                allocator.free(full.keys);
+            },
+            .missing_system_key, .missing_npdrm_key => |missing_key| {
+                missing_key.contents.deinit(allocator);
+            },
+        }
+    }
+};
 
 pub const Contents = union(Category) {
     signed_elf: Self,
@@ -542,10 +596,3 @@ pub const Contents = union(Category) {
         }
     }
 };
-
-pub fn deinit(self: CertifiedFile, allocator: std.mem.Allocator) void {
-    self.contents.deinit(allocator);
-    allocator.free(self.segment_certification_headers);
-    allocator.free(self.optional_headers);
-    allocator.free(self.keys);
-}

@@ -2,7 +2,16 @@ const std = @import("std");
 
 const Self = @import("Self.zig");
 
-pub fn read(allocator: std.mem.Allocator, json: []const u8) !KeySet {
+pub const Error = error{
+    BadEncryptionRoundKey,
+    BadResetInitializationVector,
+    BadPublic,
+    BadPrivate,
+    InvalidLength,
+    NoSpaceLeft,
+} || std.json.ParseError(std.json.Scanner);
+
+pub fn read(allocator: std.mem.Allocator, json: []const u8) Error!KeySet {
     var keyset = KeySet.init(allocator);
     errdefer keyset.deinit();
 
@@ -16,13 +25,13 @@ pub fn read(allocator: std.mem.Allocator, json: []const u8) !KeySet {
         var private: [0x15]u8 = undefined;
 
         if ((try std.fmt.hexToBytes(&encryption_round_key, &key.encryption_round_key)).len != encryption_round_key.len)
-            return error.BadEncryptionRoundKey;
+            return Error.BadEncryptionRoundKey;
         if ((try std.fmt.hexToBytes(&reset_initialization_vector, &key.reset_initialization_vector)).len != reset_initialization_vector.len)
-            return error.BadResetInitializationVector;
+            return Error.BadResetInitializationVector;
         if ((try std.fmt.hexToBytes(&public, &key.public)).len != public.len)
-            return error.BadPublic;
+            return Error.BadPublic;
         if (key.private) |private_key| if ((try std.fmt.hexToBytes(&private, &private_key)).len != private.len)
-            return error.BadPrivate;
+            return Error.BadPrivate;
 
         try keyset.put(
             .{

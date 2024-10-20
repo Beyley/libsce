@@ -7,6 +7,10 @@ pub const npdrm_keyset = @import("npdrm_keyset.zig");
 pub const system_keyset = @import("system_keyset.zig");
 pub const unself = @import("unself.zig");
 
+pub const Error = error{
+    InvalidEcdsa160SignaturePadding,
+} || std.fs.File.Reader.NoEofError;
+
 pub const DrmType = enum(u32) {
     unknown = 0,
     network = 1,
@@ -27,7 +31,7 @@ pub const Ecdsa224Signature = struct {
     r: [0x1c]u8,
     s: [0x1c]u8,
 
-    pub fn read(reader: anytype) !Ecdsa224Signature {
+    pub fn read(reader: anytype) Error!Ecdsa224Signature {
         return .{
             .r = try reader.readBytesNoEof(fieldSize(Ecdsa224Signature, "r")),
             .s = try reader.readBytesNoEof(fieldSize(Ecdsa224Signature, "s")),
@@ -40,7 +44,7 @@ pub const Ecdsa160Signature = struct {
     s: [0x15]u8,
     padding: [0x06]u8,
 
-    pub fn read(reader: anytype) !Ecdsa160Signature {
+    pub fn read(reader: anytype) Error!Ecdsa160Signature {
         const signature = .{
             .r = try reader.readBytesNoEof(fieldSize(Ecdsa160Signature, "r")),
             .s = try reader.readBytesNoEof(fieldSize(Ecdsa160Signature, "s")),
@@ -48,7 +52,7 @@ pub const Ecdsa160Signature = struct {
         };
 
         if (!std.mem.allEqual(u8, &signature.padding, 0))
-            return error.InvalidEcdsa160SignaturePadding;
+            return Error.InvalidEcdsa160SignaturePadding;
 
         return signature;
     }
@@ -57,7 +61,7 @@ pub const Ecdsa160Signature = struct {
 pub const Rsa2048Signature = struct {
     rsa: [0x100]u8,
 
-    pub fn read(reader: anytype) !Rsa2048Signature {
+    pub fn read(reader: anytype) Error!Rsa2048Signature {
         return .{
             .rsa = try reader.readBytesNoEof(fieldSize(Rsa2048Signature, "rsa")),
         };
@@ -70,7 +74,7 @@ pub const SharedSecret = struct {
     shared_secret_2: [0x10]u8,
     shared_secret_3: [4]u32,
 
-    pub fn read(reader: anytype, endian: std.builtin.Endian) !SharedSecret {
+    pub fn read(reader: anytype, endian: std.builtin.Endian) Error!SharedSecret {
         return .{
             .shared_secret_0 = try reader.readBytesNoEof(fieldSize(SharedSecret, "shared_secret_0")),
             .klicensee = try reader.readBytesNoEof(fieldSize(SharedSecret, "klicensee")),
@@ -95,7 +99,7 @@ pub const PlaintextCapability = struct {
     unknown7: u32,
     unknown8: u32,
 
-    pub fn read(reader: anytype, endian: std.builtin.Endian) !PlaintextCapability {
+    pub fn read(reader: anytype, endian: std.builtin.Endian) Error!PlaintextCapability {
         return .{
             .ctrl_flag1 = try reader.readInt(u32, endian),
             .unknown2 = try reader.readInt(u32, endian),
@@ -119,7 +123,7 @@ pub const EncryptedCapability = struct {
     unknown7: u32,
     unknown8: u32,
 
-    pub fn read(reader: anytype, endian: std.builtin.Endian) !EncryptedCapability {
+    pub fn read(reader: anytype, endian: std.builtin.Endian) Error!EncryptedCapability {
         return .{
             .unknown1 = try reader.readInt(u32, endian),
             .unknown2 = try reader.readInt(u32, endian),

@@ -44,8 +44,6 @@ fn extract(allocator: std.mem.Allocator, options: Extract) !void {
     const self_data = try std.fs.cwd().readFileAlloc(allocator, options.self_path, std.math.maxInt(usize));
     defer allocator.free(self_data);
 
-    var self_stream = std.io.fixedBufferStream(self_data);
-
     const systemKeysJson = try std.fs.cwd().readFileAlloc(allocator, options.system_keys_path.?, std.math.maxInt(usize));
     defer allocator.free(systemKeysJson);
 
@@ -58,13 +56,17 @@ fn extract(allocator: std.mem.Allocator, options: Extract) !void {
     var npdrm_keys = try npdrm_keyset.read(allocator, npdrmKeysJson);
     defer npdrm_keys.deinit();
 
-    const certified_file = try CertifiedFile.read(allocator, self_data, &self_stream, options.rap_path, system_keys, npdrm_keys);
+    const certified_file = try CertifiedFile.read(allocator, self_data, options.rap_path, system_keys, npdrm_keys);
     defer certified_file.deinit(allocator);
+
+    if (certified_file != .full) {
+        return error.UnableToFullyReadCertifiedFile;
+    }
 
     const output = try std.fs.cwd().createFile(options.out_path.?, .{});
     defer output.close();
 
-    try unself.extractSelfToElf(self_data, certified_file, output.seekableStream(), output.writer());
+    try unself.extractSelfToElf(self_data, certified_file.full, output.seekableStream(), output.writer());
 }
 
 pub fn main() !u8 {

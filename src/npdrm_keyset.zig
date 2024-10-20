@@ -43,7 +43,22 @@ pub const Key = union(enum) {
 
 pub const KeySet = std.AutoHashMap(KeyType, Key);
 
-pub fn read(allocator: std.mem.Allocator, json: []const u8) !KeySet {
+pub const Error = error{
+    JsonMissingKey,
+    InvalidJsonNpdrmKey,
+    InvalidJsonNpdrmRiv,
+    InvalidLength,
+    NoSpaceLeft,
+    JsonMissingPublicKey,
+    InvalidNpdrmKey,
+    JsonMissingCType,
+    MissingRapInitKey,
+    MissingRapPBoxKey,
+    MissingRapE1Key,
+    MissingRapE2Key,
+} || std.json.ParseError(std.json.Scanner);
+
+pub fn read(allocator: std.mem.Allocator, json: []const u8) Error!KeySet {
     var keyset = KeySet.init(allocator);
     errdefer keyset.deinit();
 
@@ -54,29 +69,29 @@ pub fn read(allocator: std.mem.Allocator, json: []const u8) !KeySet {
         switch (json_key.type) {
             inline else => |key_type| {
                 if (key_type != .sig) {
-                    const key = json_key.key orelse return error.JsonMissingKey;
+                    const key = json_key.key orelse return Error.JsonMissingKey;
 
                     var key_bytes: [0x10]u8 = undefined;
                     var riv_bytes: [0x10]u8 = undefined;
                     if ((try std.fmt.hexToBytes(&key_bytes, &key)).len != key_bytes.len)
-                        return error.InvalidNpdrmKey;
+                        return Error.InvalidJsonNpdrmKey;
                     if (json_key.riv) |riv| if ((try std.fmt.hexToBytes(&riv_bytes, &riv)).len != riv_bytes.len)
-                        return error.InvalidNpdrmKey;
+                        return Error.InvalidJsonNpdrmRiv;
 
                     try keyset.put(key_type, .{ .aes = .{
                         .erk = key_bytes,
                         .riv = riv_bytes,
                     } });
                 } else {
-                    const public_key = json_key.public orelse return error.JsonMissingPublicKey;
+                    const public_key = json_key.public orelse return Error.JsonMissingPublicKey;
 
                     var public_key_bytes: [0x28]u8 = undefined;
                     if ((try std.fmt.hexToBytes(&public_key_bytes, &public_key)).len != public_key_bytes.len)
-                        return error.InvalidNpdrmKey;
+                        return Error.InvalidNpdrmKey;
 
                     try keyset.put(key_type, .{ .sig = .{
                         .public = public_key_bytes,
-                        .curve_type = json_key.ctype orelse return error.JsonMissingCType,
+                        .curve_type = json_key.ctype orelse return Error.JsonMissingCType,
                     } });
                 }
             },
@@ -86,20 +101,20 @@ pub fn read(allocator: std.mem.Allocator, json: []const u8) !KeySet {
     return keyset;
 }
 
-pub fn rapToKlicensee(orig_rap: [0x10]u8, keyset: KeySet) ![0x10]u8 {
+pub fn rapToKlicensee(orig_rap: [0x10]u8, keyset: KeySet) Error![0x10]u8 {
     var aes_ctxt: aes.aes_context = undefined;
 
     var rap = orig_rap;
 
-    const rap_init = (keyset.get(.rap_init) orelse return error.MissingRapInitKey).aes.erk;
+    const rap_init = (keyset.get(.rap_init) orelse return Error.MissingRapInitKey).aes.erk;
 
     // initial decrypt
     _ = aes.aes_setkey_dec(&aes_ctxt, &rap_init, @bitSizeOf(@TypeOf(rap)));
     _ = aes.aes_crypt_ecb(&aes_ctxt, aes.AES_DECRYPT, &rap, &rap);
 
-    const pbox = (keyset.get(.rap_pbox) orelse return error.MissingRapPBoxKey).aes.erk;
-    const e1 = (keyset.get(.rap_e1) orelse return error.MissingRapE1Key).aes.erk;
-    const e2 = (keyset.get(.rap_e2) orelse return error.MissingRapE2Key).aes.erk;
+    const pbox = (keyset.get(.rap_pbox) orelse return Error.MissingRapPBoxKey).aes.erk;
+    const e1 = (keyset.get(.rap_e1) orelse return Error.MissingRapE1Key).aes.erk;
+    const e2 = (keyset.get(.rap_e2) orelse return Error.MissingRapE2Key).aes.erk;
 
     for (0..5) |_| {
         for (0..16) |i| {
