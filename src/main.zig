@@ -45,8 +45,13 @@ pub fn main() !void {
 
     try pretty.print(allocator, certified_file_header, .{});
 
+    // TODO: non-SELF file extraction
     if (certified_file_header.category != .signed_elf)
         return error.OnlySelfSupported;
+
+    // TODO: fSELF file extraction
+    if (certified_file_header.key_revision == 0x8000)
+        return error.FselfUnsupported;
 
     const extended_header = try Self.ExtendedHeader.read(reader, endianness);
     try pretty.print(allocator, extended_header, .{});
