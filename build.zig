@@ -15,7 +15,7 @@ pub fn build(b: *std.Build) void {
     c.installHeader(b.path("libc/c.h"), "c.h");
 
     const aes_header = b.addTranslateC(.{ .link_libc = false, .optimize = optimize, .target = target, .root_source_file = b.path("aes/aes.h") });
-    aes_header.addIncludeDir("libc");
+    aes_header.addIncludePath(b.path("libc"));
 
     const aes = b.addStaticLibrary(.{
         .name = "aes",

@@ -132,11 +132,14 @@ pub const EncryptionRootHeader = struct {
         var header: [0x40]u8 = undefined;
         try reader.readNoEof(&header);
 
-        var ctx: aes.aes_context = std.mem.zeroes(aes.aes_context);
+        var ctx: aes.aes_context = undefined;
+
+        // Remove the npdrm layer
         var iv: [0x10]u8 = .{0} ** 0x10;
         _ = aes.aes_setkey_dec(&ctx, &npdrm_key.erk, @bitSizeOf(@TypeOf(npdrm_key.erk)));
         _ = aes.aes_crypt_cbc(&ctx, aes.AES_DECRYPT, header.len, &iv, &header, &header);
 
+        // Remove the system encryption layer
         iv = system_key.reset_initialization_vector;
         _ = aes.aes_setkey_dec(&ctx, &system_key.encryption_round_key, @bitSizeOf(@TypeOf(system_key.encryption_round_key)));
         _ = aes.aes_crypt_cbc(&ctx, aes.AES_DECRYPT, header.len, &iv, &header, &header);
@@ -160,7 +163,9 @@ pub const EncryptionRootHeader = struct {
         var header: [0x40]u8 = undefined;
         try reader.readNoEof(&header);
 
-        var ctx: aes.aes_context = std.mem.zeroes(aes.aes_context);
+        var ctx: aes.aes_context = undefined;
+
+        // Remove the system encryption layer
         var iv = key.reset_initialization_vector;
         _ = aes.aes_setkey_dec(&ctx, &key.encryption_round_key, key.encryption_round_key.len * 8);
         _ = aes.aes_crypt_cbc(&ctx, aes.AES_DECRYPT, header.len, &iv, &header, &header);
@@ -241,6 +246,12 @@ pub const SegmentCertificationHeader = struct {
     key_idx: ?u32,
     iv_idx: ?u32,
     compression_algorithm: CompressionAlgorithm,
+
+    pub fn byteSize(self: SegmentCertificationHeader) usize {
+        _ = self;
+
+        return 0x30;
+    }
 
     pub fn read(reader: anytype, endian: std.builtin.Endian) !SegmentCertificationHeader {
         return .{
