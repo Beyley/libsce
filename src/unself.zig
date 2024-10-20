@@ -65,6 +65,7 @@ fn writeElfInternal(
         if (segment_header.segment_type == .phdr) {
             // Flush before seeking
             try buffered_writer.flush();
+            // NOTE: we byte-swap here because we are directly reading in the program headers from the file as memory, we are not properly parsing
             try output_stream.seekTo(@byteSwap(program_headers[segment_header.segment_id].p_offset));
 
             if (segment_header.segment_offset > std.math.maxInt(usize) or segment_header.segment_size > std.math.maxInt(usize))
