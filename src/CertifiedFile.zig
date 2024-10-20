@@ -462,7 +462,7 @@ pub fn read(
 
     // TODO: dont read the encryption root header for fSELF files
     try stream.seekTo(header.byteSize() + header.extended_header_size);
-    // We need to remove the NPDRM layer with npdrm applications
+    // NPDRM applications need to have their encryption root header read differently
     const encryption_root_header = if (header.category == .signed_elf and self.program_identification_header.program_type == .npdrm_application)
         EncryptionRootHeader.readNpdrm(reader, self, rap_path, npdrm_keys, system_key) catch |err| {
             return switch (err) {
@@ -471,6 +471,10 @@ pub fn read(
                 Error.MissingRap,
                 Error.UnknownNpdrmType,
                 Error.InvalidEncryptionRootHeaderPadding,
+                Error.MissingRapInitKey,
+                Error.MissingRapPBoxKey,
+                Error.MissingRapE1Key,
+                Error.MissingRapE2Key,
                 => .{ .missing_npdrm_key = .{
                     .header = header,
                     .contents = .{ .signed_elf = self },
