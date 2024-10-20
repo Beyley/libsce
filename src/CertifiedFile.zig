@@ -1,12 +1,16 @@
 const std = @import("std");
 
+const aes = @import("aes");
+
 const sce = @import("sce.zig");
-const system_keys = @import("system_keyset.zig");
-const npdrm_keys = @import("npdrm_keyset.zig");
+const system_keyset = @import("system_keyset.zig");
+const npdrm_keyset = @import("npdrm_keyset.zig");
+
+const Self = @import("Self.zig");
+
+const CertifiedFile = @This();
 
 const Aes128 = std.crypto.core.aes.Aes128;
-
-const aes = @import("aes");
 
 pub const Version = enum(u32) {
     ps3 = 2,
@@ -128,7 +132,7 @@ pub const EncryptionRootHeader = struct {
         return 0x10 * 4;
     }
 
-    pub fn readNpdrm(reader: anytype, npdrm_key: npdrm_keys.Key.AesKey, system_key: system_keys.Key) !EncryptionRootHeader {
+    pub fn readNpdrm(reader: anytype, npdrm_key: npdrm_keyset.Key.AesKey, system_key: system_keyset.Key) !EncryptionRootHeader {
         var header: [0x40]u8 = undefined;
         try reader.readNoEof(&header);
 
@@ -159,7 +163,7 @@ pub const EncryptionRootHeader = struct {
         return ret;
     }
 
-    pub fn read(reader: anytype, key: system_keys.Key) !EncryptionRootHeader {
+    pub fn read(reader: anytype, key: system_keyset.Key) !EncryptionRootHeader {
         var header: [0x40]u8 = undefined;
         try reader.readNoEof(&header);
 
@@ -361,3 +365,175 @@ pub const Signature = union(SigningAlgorithm) {
         };
     }
 };
+
+pub fn read(
+    allocator: std.mem.Allocator,
+    self_data: []u8,
+    stream: anytype,
+    rap_path: []const u8,
+    system_keys: system_keyset.KeySet,
+    npdrm_keys: npdrm_keyset.KeySet,
+) !CertifiedFile {
+    const reader = stream.reader();
+
+    const header = try Header.read(reader);
+    const endianness = header.endianness();
+
+    // TODO: non-SELF file extraction
+    if (header.category != .signed_elf)
+        return error.OnlySelfSupported;
+
+    // TODO: fSELF file extraction
+    if (header.key_revision == 0x8000)
+        return error.FselfUnsupported;
+
+    const self = try Self.read(stream, allocator, endianness);
+    errdefer self.deinit(allocator);
+
+    const system_key = system_keys.get(.{
+        .revision = header.key_revision,
+        .self_type = self.program_identification_header.program_type,
+    }) orelse return error.MissingKey;
+
+    // TODO: dont read the encryption root header for fSELF files
+    try stream.seekTo(header.byteSize() + header.extended_header_size);
+    // We need to remove the NPDRM layer with npdrm applications
+    const encryption_root_header = if (header.category == .signed_elf and self.program_identification_header.program_type == .npdrm_application) erh: {
+        const npdrm_header = blk: {
+            for (self.supplemental_headers) |supplemental_header| {
+                if (supplemental_header == .ps3_npdrm)
+                    break :blk supplemental_header.ps3_npdrm;
+            }
+
+            return error.MissingNpdrmSupplementalHeader;
+        };
+
+        var aes_ctxt: aes.aes_context = undefined;
+
+        const klic_key = npdrm_keys.get(.klic_key).?.aes;
+        var npdrm_key: npdrm_keyset.Key.AesKey = blk: {
+            if (npdrm_header.drm_type == .free)
+                break :blk npdrm_keys.get(.klic_free).?.aes
+            else if (npdrm_header.drm_type == .local) {
+                // TODO: RIF+act.dat+IDPS reading
+                var rap_file: [0x10]u8 = undefined;
+                if ((try std.fs.cwd().readFile(rap_path, &rap_file)).len != rap_file.len)
+                    return error.InvalidRap;
+
+                break :blk .{
+                    .erk = npdrm_keyset.rapToKlicensee(rap_file, npdrm_keys),
+                    .riv = .{0} ** 0x10,
+                };
+            } else {
+                return error.UnableToFindNpdrmKey;
+            }
+        };
+
+        // Decrypt the npdrm key
+        _ = aes.aes_setkey_dec(&aes_ctxt, &klic_key.erk, @bitSizeOf(@TypeOf(klic_key.erk)));
+        _ = aes.aes_crypt_ecb(&aes_ctxt, aes.AES_DECRYPT, &npdrm_key.erk, &npdrm_key.erk);
+
+        break :erh try EncryptionRootHeader.readNpdrm(reader, npdrm_key, system_key);
+    } else try EncryptionRootHeader.read(reader, system_key);
+
+    { // Decrypt all bytes from now until the start of the file
+        const pos: usize = @intCast(try stream.getPos());
+        const len: usize = @intCast(header.file_offset - (header.byteSize() + header.extended_header_size + encryption_root_header.byteSize()));
+        const data = self_data[pos .. pos + len];
+
+        // decrypt the certification header, segment certification header, and keys
+        const aes128 = Aes128.initEnc(encryption_root_header.key);
+        std.crypto.core.modes.ctr(@TypeOf(aes128), aes128, data, data, encryption_root_header.iv, endianness);
+    }
+
+    const certification_header = try CertificationHeader.read(reader, endianness);
+
+    const segment_certification_headers = try SegmentCertificationHeader.read(reader, allocator, certification_header, endianness);
+    errdefer allocator.free(segment_certification_headers);
+
+    // TODO: what the hell is psdevwiki talking about with "attributes"?
+    //       we are following what RPCS3/scetool does by reading these as a series of 16-byte keys
+    //       psdevwiki: https://www.psdevwiki.com/ps3/Certified_File#Attributes
+    //       rpcs3: https://github.com/RPCS3/rpcs3/blob/3e516df214f5c36d4b613aa0580182155247d2ad/rpcs3/Crypto/unself.cpp#L687
+    const keys = try allocator.alloc([0x10]u8, certification_header.attr_entry_num);
+    errdefer allocator.free(keys);
+    for (keys) |*key| try reader.readNoEof(key);
+
+    const optional_headers = try OptionalHeader.read(reader, allocator, certification_header, endianness);
+    errdefer allocator.free(optional_headers);
+
+    const signature = try Signature.read(reader, certification_header);
+
+    // decrypt data
+
+    for (segment_certification_headers, 0..) |segment_header, i| {
+        _ = i; // autofix
+        if (segment_header.encryption_algorithm != .none) blk: {
+            if (segment_header.key_idx == null or segment_header.iv_idx == null or segment_header.key_idx.? >= certification_header.attr_entry_num or segment_header.iv_idx.? >= certification_header.attr_entry_num) {
+                break :blk;
+            }
+
+            const key_idx = segment_header.key_idx.?;
+            const iv_idx = segment_header.iv_idx.?;
+
+            const data = self_data[segment_header.segment_offset .. segment_header.segment_offset + segment_header.segment_size];
+
+            switch (segment_header.encryption_algorithm) {
+                .aes128_ctr => {
+                    const aes128 = Aes128.initEnc(keys[key_idx]);
+                    std.crypto.core.modes.ctr(@TypeOf(aes128), aes128, data, data, keys[iv_idx], endianness);
+                },
+                .aes128_cbc_cfb => {
+                    // TODO: lets throw an error so we can hopefully find one of these cbc_cfb SELFs in the wild, and implement support!
+                    return error.TodoAes128CbcCfb;
+                },
+                .none => unreachable,
+            }
+        }
+    }
+
+    return .{
+        .header = header,
+        .encryption_root_header = encryption_root_header,
+        .certification_header = certification_header,
+        .segment_certification_headers = segment_certification_headers,
+        .keys = keys,
+        .optional_headers = optional_headers,
+        .signature = signature,
+        .contents = .{
+            .signed_elf = self,
+        },
+    };
+}
+
+header: Header,
+encryption_root_header: EncryptionRootHeader,
+certification_header: CertificationHeader,
+segment_certification_headers: []const SegmentCertificationHeader,
+keys: []const [0x10]u8,
+optional_headers: []const OptionalHeader,
+signature: Signature,
+contents: Contents,
+
+pub const Contents = union(Category) {
+    signed_elf: Self,
+    signed_revoke_list: void,
+    signed_package: void,
+    signed_security_policy_profile: void,
+    signed_diff: void,
+    signed_param_sfo: void,
+
+    pub fn deinit(self: Contents, allocator: std.mem.Allocator) void {
+        switch (self) {
+            .signed_elf => |signed_elf| signed_elf.deinit(allocator),
+            else => {},
+        }
+    }
+};
+
+pub fn deinit(self: CertifiedFile, allocator: std.mem.Allocator) void {
+    self.contents.deinit(allocator);
+    allocator.free(self.segment_certification_headers);
+    allocator.free(self.optional_headers);
+    allocator.free(self.keys);
+}

@@ -2,6 +2,8 @@ const std = @import("std");
 
 const sce = @import("sce.zig");
 
+const Self = @This();
+
 /// aka self header
 pub const ExtendedHeader = struct {
     pub const Version = enum(u64) {
@@ -331,3 +333,30 @@ pub const SupplementalHeaderTable = struct {
         return try headers.toOwnedSlice();
     }
 };
+
+pub fn read(stream: anytype, allocator: std.mem.Allocator, endianness: std.builtin.Endian) !Self {
+    const reader = stream.reader();
+
+    const extended_header = try Self.ExtendedHeader.read(reader, endianness);
+
+    try stream.seekTo(extended_header.program_identification_header_offset);
+    const program_identification_header = try ProgramIdentificationHeader.read(reader, endianness);
+
+    try stream.seekTo(extended_header.supplemental_header_offset);
+    const supplemental_headers = try SupplementalHeaderTable.read(allocator, reader, extended_header, endianness);
+    errdefer allocator.free(supplemental_headers);
+
+    return .{
+        .extended_header = extended_header,
+        .program_identification_header = program_identification_header,
+        .supplemental_headers = supplemental_headers,
+    };
+}
+
+extended_header: ExtendedHeader,
+program_identification_header: ProgramIdentificationHeader,
+supplemental_headers: []SupplementalHeaderTable.SupplementalHeader,
+
+pub fn deinit(self: Self, allocator: std.mem.Allocator) void {
+    allocator.free(self.supplemental_headers);
+}

@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const self = @import("self.zig");
+const Self = @import("Self.zig");
 
 pub fn read(allocator: std.mem.Allocator, json: []const u8) !KeySet {
     var keyset = KeySet.init(allocator);
@@ -44,7 +44,7 @@ pub fn read(allocator: std.mem.Allocator, json: []const u8) !KeySet {
 
 const JsonKey = struct {
     revision: []const u8,
-    self_type: self.ProgramIdentificationHeader.ProgramType,
+    self_type: Self.ProgramIdentificationHeader.ProgramType,
     encryption_round_key: [0x20 * 2]u8,
     reset_initialization_vector: [0x10 * 2]u8,
     public: [0x28 * 2]u8,
@@ -62,7 +62,7 @@ pub const Key = struct {
 
 pub const KeySetIndex = struct {
     revision: u16,
-    self_type: self.ProgramIdentificationHeader.ProgramType,
+    self_type: Self.ProgramIdentificationHeader.ProgramType,
 };
 
 pub const KeySet = std.AutoHashMap(KeySetIndex, Key);
