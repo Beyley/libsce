@@ -44,3 +44,51 @@ pub const SharedSecret = struct {
         };
     }
 };
+
+pub const PlaintextCapability = struct {
+    ctrl_flag1: u32,
+    unknown2: u32,
+    unknown3: u32,
+    unknown4: u32,
+    unknown5: u32,
+    unknown6: u32,
+    unknown7: u32,
+    unknown8: u32,
+
+    pub fn read(reader: anytype, endian: std.builtin.Endian) !PlaintextCapability {
+        return .{
+            .ctrl_flag1 = try reader.readInt(u32, endian),
+            .unknown2 = try reader.readInt(u32, endian),
+            .unknown3 = try reader.readInt(u32, endian),
+            .unknown4 = try reader.readInt(u32, endian),
+            .unknown5 = try reader.readInt(u32, endian),
+            .unknown6 = try reader.readInt(u32, endian),
+            .unknown7 = try reader.readInt(u32, endian),
+            .unknown8 = try reader.readInt(u32, endian),
+        };
+    }
+};
+
+pub const EncryptedCapability = struct {
+    unknown1: u32,
+    unknown2: u32,
+    unknown3: u32,
+    unknown4: u32,
+    unknown5: u32,
+    unknown6: u32,
+    unknown7: u32,
+    unknown8: u32,
+
+    pub fn read(reader: anytype, endian: std.builtin.Endian) !EncryptedCapability {
+        return .{
+            .unknown1 = try reader.readInt(u32, endian),
+            .unknown2 = try reader.readInt(u32, endian),
+            .unknown3 = try reader.readInt(u32, endian),
+            .unknown4 = try reader.readInt(u32, endian),
+            .unknown5 = try reader.readInt(u32, endian),
+            .unknown6 = try reader.readInt(u32, endian),
+            .unknown7 = try reader.readInt(u32, endian),
+            .unknown8 = try reader.readInt(u32, endian),
+        };
+    }
+};

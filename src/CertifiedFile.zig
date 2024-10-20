@@ -288,4 +288,60 @@ pub const SegmentCertificationHeader = struct {
     }
 };
 
-pub const Attributes = struct {};
+pub const OptionalHeaderType = enum(u32) {
+    capability = 1,
+    individual_seed = 2,
+    attribute = 3,
+};
+
+pub const OptionalHeader = union(OptionalHeaderType) {
+    capability: sce.EncryptedCapability,
+    individual_seed: [0x100]u8,
+    attribute: [0x20]u8,
+
+    pub const IndividualSeed = [0x100]u8;
+    pub const Attribute = [0x20]u8;
+
+    pub fn read(raw_reader: anytype, allocator: std.mem.Allocator, certifiction_header: CertificationHeader, endian: std.builtin.Endian) ![]OptionalHeader {
+        if (certifiction_header.optional_header_size == 0)
+            return &.{};
+
+        var optional_headers = std.ArrayList(OptionalHeader).init(allocator);
+        errdefer optional_headers.deinit();
+
+        var counting_reader = std.io.countingReader(raw_reader);
+        const reader = counting_reader.reader();
+
+        var total_read: u64 = 0;
+        var to_read: u64 = certifiction_header.optional_header_size;
+        while (to_read > 0) : (to_read -= counting_reader.bytes_read) {
+            defer counting_reader.bytes_read = 0;
+
+            const header_size = @sizeOf(OptionalHeaderType) + @sizeOf(u32) + @sizeOf(u64);
+
+            const optional_header_type = try reader.readEnum(OptionalHeaderType, endian);
+            const size = try reader.readInt(u32, endian) - header_size;
+            const next = try reader.readInt(u64, endian) > 0;
+
+            const read_start = counting_reader.bytes_read;
+
+            try optional_headers.append(switch (optional_header_type) {
+                .capability => .{ .capability = try sce.EncryptedCapability.read(reader, endian) },
+                .individual_seed => .{ .individual_seed = try reader.readBytesNoEof(@sizeOf(IndividualSeed)) },
+                .attribute => .{ .attribute = try reader.readBytesNoEof(@sizeOf(Attribute)) },
+            });
+
+            total_read += counting_reader.bytes_read;
+
+            if (counting_reader.bytes_read - read_start != size)
+                return error.OptionalHeaderSizeMismatch;
+
+            if (!next) break;
+        }
+
+        if (total_read != certifiction_header.optional_header_size)
+            return error.OptionalHeaderTableSizeMismatch;
+
+        return optional_headers.toOwnedSlice();
+    }
+};

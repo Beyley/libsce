@@ -135,9 +135,15 @@ pub fn main() !void {
 
     // TODO: what the hell is psdevwiki talking about with "attributes"?
     //       we are following what RPCS3/scetool does by reading these as a series of 16-byte keys
+    //       psdevwiki: https://www.psdevwiki.com/ps3/Certified_File#Attributes
+    //       rpcs3: https://github.com/RPCS3/rpcs3/blob/3e516df214f5c36d4b613aa0580182155247d2ad/rpcs3/Crypto/unself.cpp#L687
     const keys = try allocator.alloc([0x10]u8, certification_header.attr_entry_num);
     defer allocator.free(keys);
     for (keys) |*key| try reader.readNoEof(key);
-    std.debug.print("keys: ", .{});
+    std.debug.print("read {d} keys: ", .{keys.len});
     try pretty.print(allocator, keys, .{});
+
+    const optional_headers = try CertifiedFile.OptionalHeader.read(reader, allocator, certification_header, endianness);
+    defer allocator.free(optional_headers);
+    try pretty.print(allocator, optional_headers, .{});
 }

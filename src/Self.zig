@@ -169,29 +169,6 @@ pub const SupplementalHeaderTable = struct {
     };
 
     pub const SupplementalHeader = union(SupplementalHeaderType) {
-        pub const PlaintextCapability = struct {
-            ctrl_flag1: u32,
-            unknown2: u32,
-            unknown3: u32,
-            unknown4: u32,
-            unknown5: u32,
-            unknown6: u32,
-            unknown7: u32,
-            unknown8: u32,
-
-            pub fn read(reader: anytype, endian: std.builtin.Endian) !PlaintextCapability {
-                return .{
-                    .ctrl_flag1 = try reader.readInt(u32, endian),
-                    .unknown2 = try reader.readInt(u32, endian),
-                    .unknown3 = try reader.readInt(u32, endian),
-                    .unknown4 = try reader.readInt(u32, endian),
-                    .unknown5 = try reader.readInt(u32, endian),
-                    .unknown6 = try reader.readInt(u32, endian),
-                    .unknown7 = try reader.readInt(u32, endian),
-                    .unknown8 = try reader.readInt(u32, endian),
-                };
-            }
-        };
         pub const Ps3ElfDigest = union(enum) {
             pub const Small = struct {
                 constant_or_elf_digsest: [0x14]u8,
@@ -308,7 +285,7 @@ pub const SupplementalHeaderTable = struct {
             }
         };
 
-        plaintext_capability: PlaintextCapability,
+        plaintext_capability: sce.PlaintextCapability,
         ps3_elf_digest: Ps3ElfDigest,
         ps3_npdrm: Ps3Npdrm,
         vita_elf_digest: VitaElfDigest,
@@ -331,7 +308,7 @@ pub const SupplementalHeaderTable = struct {
             const next = (try reader.readInt(u64, endian)) > 0;
 
             const supplemental_header: SupplementalHeader = switch (header_type) {
-                .plaintext_capability => .{ .plaintext_capability = try SupplementalHeader.PlaintextCapability.read(reader, endian) },
+                .plaintext_capability => .{ .plaintext_capability = try sce.PlaintextCapability.read(reader, endian) },
                 .ps3_elf_digest => .{ .ps3_elf_digest = try SupplementalHeader.Ps3ElfDigest.read(reader, endian, size) },
                 .ps3_npdrm => .{ .ps3_npdrm = try SupplementalHeader.Ps3Npdrm.read(reader, endian) },
                 .vita_elf_digest => .{ .vita_elf_digest = try SupplementalHeader.VitaElfDigest.read(reader, endian) },
