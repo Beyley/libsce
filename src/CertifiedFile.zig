@@ -186,9 +186,10 @@ pub const EncryptionRootHeader = struct {
     }
 };
 
+/// aka metadata haeder
 pub const CertificationHeader = struct {
     sign_offset: u64,
-    sign_algorithm: u32,
+    sign_algorithm: SigningAlgorithm,
     cert_entry_num: u32,
     attr_entry_num: u32,
     optional_header_size: u32,
@@ -201,7 +202,7 @@ pub const CertificationHeader = struct {
 
         return .{
             .sign_offset = std.mem.readInt(u64, header[0..0x08], endian),
-            .sign_algorithm = std.mem.readInt(u32, header[0x08..0x0c], endian),
+            .sign_algorithm = @enumFromInt(std.mem.readInt(u32, header[0x08..0x0c], endian)),
             .cert_entry_num = std.mem.readInt(u32, header[0x0c..0x10], endian),
             .attr_entry_num = std.mem.readInt(u32, header[0x10..0x14], endian),
             .optional_header_size = std.mem.readInt(u32, header[0x14..0x18], endian),
@@ -210,19 +211,20 @@ pub const CertificationHeader = struct {
     }
 };
 
+pub const SigningAlgorithm = enum(u32) {
+    ecdsa160 = 1,
+    hmac_sha1 = 2,
+    sha1 = 3,
+    rsa2048 = 5,
+    hmac_sha256 = 6,
+};
+
+/// aka metadata section header
 pub const SegmentCertificationHeader = struct {
     pub const SegmentType = enum(u32) {
         shdr = 1,
         phdr = 2,
         sceversion = 3,
-    };
-
-    pub const SigningAlgorithm = enum(u32) {
-        ecdsa160 = 1,
-        hmac_sha1 = 2,
-        sha1 = 3,
-        rsa2048 = 5,
-        hmac_sha256 = 6,
     };
 
     pub const EncryptionAlgorithm = enum(u32) {
@@ -285,3 +287,5 @@ pub const SegmentCertificationHeader = struct {
         };
     }
 };
+
+pub const Attributes = struct {};

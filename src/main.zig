@@ -116,13 +116,15 @@ pub fn main() !void {
 
     try pretty.print(allocator, encryption_root_header, .{});
 
-    const pos: usize = @intCast(try self_stream.getPos());
-    const len: usize = @intCast(certified_file_header.file_offset - (certified_file_header.byteSize() + certified_file_header.extended_header_size + encryption_root_header.byteSize()));
-    const data = self[pos .. pos + len];
+    { // Decrypt all bytes from now until the start of the file
+        const pos: usize = @intCast(try self_stream.getPos());
+        const len: usize = @intCast(certified_file_header.file_offset - (certified_file_header.byteSize() + certified_file_header.extended_header_size + encryption_root_header.byteSize()));
+        const data = self[pos .. pos + len];
 
-    // decrypt the certification header, segment certification header, and keys
-    const aes128 = Aes128.initEnc(encryption_root_header.key);
-    std.crypto.core.modes.ctr(@TypeOf(aes128), aes128, data, data, encryption_root_header.iv, endianness);
+        // decrypt the certification header, segment certification header, and keys
+        const aes128 = Aes128.initEnc(encryption_root_header.key);
+        std.crypto.core.modes.ctr(@TypeOf(aes128), aes128, data, data, encryption_root_header.iv, endianness);
+    }
 
     const certification_header = try CertifiedFile.CertificationHeader.read(reader, endianness);
     try pretty.print(allocator, certification_header, .{});
@@ -130,4 +132,12 @@ pub fn main() !void {
     const segment_certification_headers = try CertifiedFile.SegmentCertificationHeader.read(reader, allocator, certification_header, endianness);
     defer allocator.free(segment_certification_headers);
     try pretty.print(allocator, segment_certification_headers, .{});
+
+    // TODO: what the hell is psdevwiki talking about with "attributes"?
+    //       we are following what RPCS3/scetool does by reading these as a series of 16-byte keys
+    const keys = try allocator.alloc([0x10]u8, certification_header.attr_entry_num);
+    defer allocator.free(keys);
+    for (keys) |*key| try reader.readNoEof(key);
+    std.debug.print("keys: ", .{});
+    try pretty.print(allocator, keys, .{});
 }
