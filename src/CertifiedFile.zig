@@ -19,7 +19,7 @@ pub const Error = error{
     MissingNpdrmKlicFreeKey,
     MissingRap,
     InvalidRap,
-    UnableToFindNpdrmKey,
+    UnknownNpdrmType,
     OptionalHeaderSizeMismatch,
     OptionalHeaderTableSizeMismatch,
     UnsupportedSignatureType,
@@ -147,21 +147,67 @@ pub const EncryptionRootHeader = struct {
         return 0x10 * 4;
     }
 
-    pub fn readNpdrm(reader: anytype, npdrm_key: npdrm_keyset.Key.AesKey, system_key: system_keyset.Key) Error!EncryptionRootHeader {
+    pub fn readNpdrm(
+        reader: anytype,
+        self: Self,
+        rap_path: ?[]const u8,
+        npdrm_keys: npdrm_keyset.KeySet,
+        system_key: system_keyset.Key,
+    ) Error!EncryptionRootHeader {
+        // Search for the PS3 NPDRM header
+        const npdrm_header = blk: {
+            for (self.supplemental_headers) |supplemental_header| {
+                if (supplemental_header == .ps3_npdrm)
+                    break :blk supplemental_header.ps3_npdrm;
+            }
+
+            return Error.MissingNpdrmSupplementalHeader;
+        };
+
+        // Get the key used to decrypt the NPDRM key
+        const klic_key = (npdrm_keys.get(.klic_key) orelse return Error.MissingNpdrmKlicKey).aes;
+        // Read the NPDRM key
+        var npdrm_key: npdrm_keyset.Key.AesKey =
+            if (npdrm_header.drm_type == .free)
+            // If the CF uses the free NPDRM key, use that
+            (npdrm_keys.get(.klic_free) orelse return Error.MissingNpdrmKlicFreeKey).aes
+        else if (npdrm_header.drm_type == .local) blk: {
+            // If the CF uses a local license, we need to load then decrypt that
+
+            // TODO: RIF+act.dat+IDPS reading
+            var rap_file: [0x10]u8 = undefined;
+            if ((try std.fs.cwd().readFile(rap_path orelse return Error.MissingRap, &rap_file)).len != rap_file.len)
+                return Error.InvalidRap;
+
+            // Convert the RAP file to a Klicensee
+            break :blk .{
+                .erk = try npdrm_keyset.rapToKlicensee(rap_file, npdrm_keys),
+                .riv = .{0} ** 0x10,
+            };
+        } else {
+            // Return an error if we can't handle this NPDRM type
+            return Error.UnknownNpdrmType;
+        };
+
+        var aes_ctxt: aes.aes_context = undefined;
+
+        // Decrypt the npdrm key
+        _ = aes.aes_setkey_dec(&aes_ctxt, &klic_key.erk, @bitSizeOf(@TypeOf(klic_key.erk)));
+        _ = aes.aes_crypt_ecb(&aes_ctxt, aes.AES_DECRYPT, &npdrm_key.erk, &npdrm_key.erk);
+
+        // Read the encrypted header
         var header: [0x40]u8 = undefined;
         try reader.readNoEof(&header);
 
-        var ctx: aes.aes_context = undefined;
-
         // Remove the npdrm layer
         var iv: [0x10]u8 = .{0} ** 0x10;
-        _ = aes.aes_setkey_dec(&ctx, &npdrm_key.erk, @bitSizeOf(@TypeOf(npdrm_key.erk)));
-        _ = aes.aes_crypt_cbc(&ctx, aes.AES_DECRYPT, header.len, &iv, &header, &header);
+        _ = aes.aes_setkey_dec(&aes_ctxt, &npdrm_key.erk, @bitSizeOf(@TypeOf(npdrm_key.erk)));
+        _ = aes.aes_crypt_cbc(&aes_ctxt, aes.AES_DECRYPT, header.len, &iv, &header, &header);
 
         // Remove the system encryption layer
         iv = system_key.reset_initialization_vector;
-        _ = aes.aes_setkey_dec(&ctx, &system_key.encryption_round_key, @bitSizeOf(@TypeOf(system_key.encryption_round_key)));
-        _ = aes.aes_crypt_cbc(&ctx, aes.AES_DECRYPT, header.len, &iv, &header, &header);
+        _ = aes.aes_setkey_dec(&aes_ctxt, &system_key.encryption_round_key, @bitSizeOf(@TypeOf(system_key.encryption_round_key)));
+        _ = aes.aes_crypt_cbc(&aes_ctxt, aes.AES_DECRYPT, header.len, &iv, &header, &header);
 
         const ret: EncryptionRootHeader = .{
             .key = header[0..0x10].*,
@@ -221,7 +267,7 @@ pub const CertificationHeader = struct {
 
         return .{
             .sign_offset = std.mem.readInt(u64, header[0..0x08], endian),
-            .sign_algorithm = @enumFromInt(std.mem.readInt(u32, header[0x08..0x0c], endian)),
+            .sign_algorithm = try std.meta.intToEnum(SigningAlgorithm, std.mem.readInt(u32, header[0x08..0x0c], endian)),
             .cert_entry_num = std.mem.readInt(u32, header[0x0c..0x10], endian),
             .attr_entry_num = std.mem.readInt(u32, header[0x10..0x14], endian),
             .optional_header_size = std.mem.readInt(u32, header[0x14..0x18], endian),
@@ -381,10 +427,6 @@ pub const Signature = union(SigningAlgorithm) {
     }
 };
 
-pub fn readHeader(reader: anytype) Error!Header {
-    return Header.read(reader);
-}
-
 pub fn read(
     allocator: std.mem.Allocator,
     self_data: []u8,
@@ -396,7 +438,7 @@ pub fn read(
 
     const reader = stream.reader();
 
-    const header = try readHeader(reader);
+    const header = try Header.read(reader);
     const endianness = header.endianness();
 
     // TODO: non-SELF file extraction
@@ -421,45 +463,25 @@ pub fn read(
     // TODO: dont read the encryption root header for fSELF files
     try stream.seekTo(header.byteSize() + header.extended_header_size);
     // We need to remove the NPDRM layer with npdrm applications
-    const encryption_root_header = if (header.category == .signed_elf and self.program_identification_header.program_type == .npdrm_application) erh: {
-        const npdrm_header = blk: {
-            for (self.supplemental_headers) |supplemental_header| {
-                if (supplemental_header == .ps3_npdrm)
-                    break :blk supplemental_header.ps3_npdrm;
-            }
+    const encryption_root_header = if (header.category == .signed_elf and self.program_identification_header.program_type == .npdrm_application)
+        EncryptionRootHeader.readNpdrm(reader, self, rap_path, npdrm_keys, system_key) catch |err| {
+            return switch (err) {
+                Error.MissingNpdrmKlicKey,
+                Error.MissingNpdrmKlicFreeKey,
+                Error.MissingRap,
+                Error.UnknownNpdrmType,
+                Error.InvalidEncryptionRootHeaderPadding,
+                => .{ .missing_npdrm_key = .{
+                    .header = header,
+                    .contents = .{ .signed_elf = self },
+                } },
+                else => err,
+            };
+        }
+    else
+        try EncryptionRootHeader.read(reader, system_key);
 
-            return Error.MissingNpdrmSupplementalHeader;
-        };
-
-        var aes_ctxt: aes.aes_context = undefined;
-
-        const klic_key = (npdrm_keys.get(.klic_key) orelse return Error.MissingNpdrmKlicKey).aes;
-        var npdrm_key: npdrm_keyset.Key.AesKey = blk: {
-            if (npdrm_header.drm_type == .free)
-                break :blk (npdrm_keys.get(.klic_free) orelse return Error.MissingNpdrmKlicFreeKey).aes
-            else if (npdrm_header.drm_type == .local) {
-                // TODO: RIF+act.dat+IDPS reading
-                var rap_file: [0x10]u8 = undefined;
-                if ((try std.fs.cwd().readFile(rap_path orelse return Error.MissingRap, &rap_file)).len != rap_file.len)
-                    return Error.InvalidRap;
-
-                break :blk .{
-                    .erk = try npdrm_keyset.rapToKlicensee(rap_file, npdrm_keys),
-                    .riv = .{0} ** 0x10,
-                };
-            } else {
-                return Error.UnableToFindNpdrmKey;
-            }
-        };
-
-        // Decrypt the npdrm key
-        _ = aes.aes_setkey_dec(&aes_ctxt, &klic_key.erk, @bitSizeOf(@TypeOf(klic_key.erk)));
-        _ = aes.aes_crypt_ecb(&aes_ctxt, aes.AES_DECRYPT, &npdrm_key.erk, &npdrm_key.erk);
-
-        break :erh try EncryptionRootHeader.readNpdrm(reader, npdrm_key, system_key);
-    } else try EncryptionRootHeader.read(reader, system_key);
-
-    { // Decrypt all bytes from now until the start of the file
+    { // Decrypt all bytes from now until the start of the encapsulated file
         const pos = try stream.getPos();
         const len = header.file_offset - (header.byteSize() + header.extended_header_size + encryption_root_header.byteSize());
 
