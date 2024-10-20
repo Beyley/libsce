@@ -1,5 +1,11 @@
 const std = @import("std");
 
+pub const self = @import("self.zig");
+pub const certified_file = @import("certified_file.zig");
+
+pub const npdrm_keyset = @import("npdrm_keyset.zig");
+pub const system_keyset = @import("system_keyset.zig");
+
 pub const DrmType = enum(u32) {
     unknown = 0,
     network = 1,
@@ -12,14 +18,18 @@ pub const DrmType = enum(u32) {
     unknown_ps3 = 0x2000,
 };
 
+fn fieldSize(comptime T: type, comptime field_name: []const u8) comptime_int {
+    return @sizeOf(@FieldType(T, field_name));
+}
+
 pub const Ecdsa224Signature = struct {
     r: [0x1c]u8,
     s: [0x1c]u8,
 
     pub fn read(reader: anytype) !Ecdsa224Signature {
         return .{
-            .r = try reader.readBytesNoEof(0x1c),
-            .s = try reader.readBytesNoEof(0x1c),
+            .r = try reader.readBytesNoEof(fieldSize(Ecdsa224Signature, "r")),
+            .s = try reader.readBytesNoEof(fieldSize(Ecdsa224Signature, "s")),
         };
     }
 };
@@ -31,9 +41,9 @@ pub const Ecdsa160Signature = struct {
 
     pub fn read(reader: anytype) !Ecdsa160Signature {
         const signature = .{
-            .r = try reader.readBytesNoEof(0x15),
-            .s = try reader.readBytesNoEof(0x15),
-            .padding = try reader.readBytesNoEof(0x06),
+            .r = try reader.readBytesNoEof(fieldSize(Ecdsa160Signature, "r")),
+            .s = try reader.readBytesNoEof(fieldSize(Ecdsa160Signature, "s")),
+            .padding = try reader.readBytesNoEof(fieldSize(Ecdsa160Signature, "padding")),
         };
 
         if (!std.mem.allEqual(u8, &signature.padding, 0))
@@ -48,7 +58,7 @@ pub const Rsa2048Signature = struct {
 
     pub fn read(reader: anytype) !Rsa2048Signature {
         return .{
-            .rsa = try reader.readBytesNoEof(0x100),
+            .rsa = try reader.readBytesNoEof(fieldSize(Rsa2048Signature, "rsa")),
         };
     }
 };
@@ -61,9 +71,9 @@ pub const SharedSecret = struct {
 
     pub fn read(reader: anytype, endian: std.builtin.Endian) !SharedSecret {
         return .{
-            .shared_secret_0 = try reader.readBytesNoEof(0x10),
-            .klicensee = try reader.readBytesNoEof(0x10),
-            .shared_secret_2 = try reader.readBytesNoEof(0x10),
+            .shared_secret_0 = try reader.readBytesNoEof(fieldSize(SharedSecret, "shared_secret_0")),
+            .klicensee = try reader.readBytesNoEof(fieldSize(SharedSecret, "klicensee")),
+            .shared_secret_2 = try reader.readBytesNoEof(fieldSize(SharedSecret, "shared_secret_2")),
             .shared_secret_3 = .{
                 try reader.readInt(u32, endian),
                 try reader.readInt(u32, endian),
