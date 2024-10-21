@@ -20,7 +20,7 @@ pub const ExtendedHeader = struct {
     /// The version of the extended header
     ///
     /// aka header_type
-    extended_header_version: Version,
+    version: Version,
     /// The offset to the Program Identification Header
     ///
     /// aka app_info_offset
@@ -63,7 +63,7 @@ pub const ExtendedHeader = struct {
 
     pub fn read(reader: anytype, endian: std.builtin.Endian) Error!ExtendedHeader {
         return .{
-            .extended_header_version = try reader.readEnum(Version, endian),
+            .version = try reader.readEnum(Version, endian),
             .program_identification_header_offset = try reader.readInt(u64, endian),
             .elf_header_offset = try reader.readInt(u64, endian),
             .program_header_offset = try reader.readInt(u64, endian),
@@ -262,7 +262,7 @@ pub const SupplementalHeaderTable = struct {
             }
         };
         pub const VitaNpdrm = struct {
-            finaled_flag: u32,
+            finalized_flag: u32,
             drm_type: sce.DrmType,
             padding: u32,
             content_id: [0x30]u8,
@@ -275,7 +275,7 @@ pub const SupplementalHeaderTable = struct {
                     return Error.BadVitaNpdrmMagic;
 
                 return .{
-                    .finaled_flag = try reader.readInt(u32, endian),
+                    .finalized_flag = try reader.readInt(u32, endian),
                     .drm_type = try reader.readEnum(sce.DrmType, endian),
                     .padding = try reader.readInt(u32, endian),
                     .content_id = try reader.readBytesNoEof(0x30),

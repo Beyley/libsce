@@ -1,7 +1,7 @@
 const std = @import("std");
 
 pub const Self = @import("Self.zig");
-pub const CertifiedFile = @import("CertifiedFile.zig");
+pub const certified_file = @import("certified_file.zig");
 
 pub const npdrm_keyset = @import("npdrm_keyset.zig");
 pub const system_keyset = @import("system_keyset.zig");

@@ -1,8 +1,8 @@
 const std = @import("std");
 
 const sce = @import("sce.zig");
-const certified_file = sce.CertifiedFile;
-const CertifiedFile = sce.CertifiedFile.CertifiedFile;
+const certified_file = sce.certified_file;
+const CertifiedFile = sce.certified_file.CertifiedFile;
 const Self = sce.Self;
 
 pub const Error = error{
@@ -10,14 +10,17 @@ pub const Error = error{
     InvalidElfEndian,
     InvalidElfMagic,
     InvalidElfVersion,
-} || std.fs.File.WriteError || std.fs.File.SeekError || std.compress.zlib.Decompressor(std.fs.File.Reader).Error;
+} || std.fs.File.WriteError || std.fs.File.SeekError || std.compress.zlib.Decompressor(std.fs.File.Reader).Error || certified_file.Error;
 
 pub fn extractSelfToElf(
     self_data: []u8,
-    full_certified_file: CertifiedFile.Full,
+    full_certified_file: *CertifiedFile.Full,
     output_stream: anytype,
     output_writer: anytype,
 ) Error!void {
+    if (!full_certified_file.body_decrypted)
+        try full_certified_file.decryptBody();
+
     const self = full_certified_file.contents.signed_elf;
 
     const program_type = self.program_identification_header.program_type;

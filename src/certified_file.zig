@@ -353,13 +353,13 @@ pub const SegmentCertificationHeader = struct {
     }
 };
 
-pub const OptionalHeaderType = enum(u32) {
-    capability = 1,
-    individual_seed = 2,
-    attribute = 3,
-};
+pub const OptionalHeader = union(Type) {
+    pub const Type = enum(u32) {
+        capability = 1,
+        individual_seed = 2,
+        attribute = 3,
+    };
 
-pub const OptionalHeader = union(OptionalHeaderType) {
     capability: sce.EncryptedCapability,
     individual_seed: [0x100]u8,
     attribute: [0x20]u8,
@@ -382,9 +382,9 @@ pub const OptionalHeader = union(OptionalHeaderType) {
         while (to_read > 0) : (to_read -= counting_reader.bytes_read) {
             defer counting_reader.bytes_read = 0;
 
-            const header_size = @sizeOf(OptionalHeaderType) + @sizeOf(u32) + @sizeOf(u64);
+            const header_size = @sizeOf(Type) + @sizeOf(u32) + @sizeOf(u64);
 
-            const optional_header_type = try reader.readEnum(OptionalHeaderType, endian);
+            const optional_header_type = try reader.readEnum(Type, endian);
             const size = try reader.readInt(u32, endian) - header_size;
             const next = try reader.readInt(u64, endian) > 0;
 
@@ -429,12 +429,12 @@ pub const Signature = union(SigningAlgorithm) {
 
 pub fn read(
     allocator: std.mem.Allocator,
-    self_data: []u8,
+    cf_data: []u8,
     rap_path: ?[]const u8,
     system_keys: system_keyset.KeySet,
     npdrm_keys: npdrm_keyset.KeySet,
 ) Error!CertifiedFile {
-    var stream = std.io.fixedBufferStream(self_data);
+    var stream = std.io.fixedBufferStream(cf_data);
 
     const reader = stream.reader();
 
@@ -492,7 +492,7 @@ pub fn read(
         if (pos > std.math.maxInt(usize) or len > std.math.maxInt(usize))
             return Error.InvalidPosOrSizeForPlatform;
 
-        const data = self_data[@intCast(pos)..@intCast(pos + len)];
+        const data = cf_data[@intCast(pos)..@intCast(pos + len)];
 
         // decrypt the certification header, segment certification header, and keys
         const aes128 = Aes128.initEnc(encryption_root_header.key);
@@ -517,42 +517,6 @@ pub fn read(
 
     const signature = try Signature.read(reader, certification_header);
 
-    // decrypt data
-
-    for (segment_certification_headers) |segment_header| {
-        if (segment_header.encryption_algorithm != .none) {
-            // Skip segments which are missing a key/iv
-            if (segment_header.key_idx == null or segment_header.iv_idx == null) {
-                continue;
-            }
-
-            const key_idx = segment_header.key_idx.?;
-            const iv_idx = segment_header.iv_idx.?;
-
-            // Skip segments with invalid key/iv
-            if (key_idx >= certification_header.attr_entry_num or iv_idx >= certification_header.attr_entry_num) {
-                continue;
-            }
-
-            if (segment_header.segment_offset > std.math.maxInt(usize) or segment_header.segment_size > std.math.maxInt(usize))
-                return Error.InvalidPosOrSizeForPlatform;
-
-            const data = self_data[@intCast(segment_header.segment_offset)..@intCast(segment_header.segment_offset + segment_header.segment_size)];
-
-            switch (segment_header.encryption_algorithm) {
-                .aes128_ctr => {
-                    const aes128 = Aes128.initEnc(keys[key_idx]);
-                    std.crypto.core.modes.ctr(@TypeOf(aes128), aes128, data, data, keys[iv_idx], endianness);
-                },
-                .aes128_cbc_cfb => {
-                    // TODO: lets throw an error so we can hopefully find one of these cbc_cfb SELFs in the wild, and implement support!
-                    return Error.UnsupportedAes128CbcCfbSegment;
-                },
-                .none => unreachable,
-            }
-        }
-    }
-
     return .{
         .full = .{
             .header = header,
@@ -565,6 +529,8 @@ pub fn read(
             .contents = .{
                 .signed_elf = self,
             },
+            .body_decrypted = false,
+            .cf_data = cf_data,
         },
     };
 }
@@ -580,6 +546,46 @@ pub const CertifiedFile = union(enum) {
         optional_headers: []const OptionalHeader,
         signature: Signature,
         contents: Contents,
+        cf_data: []u8,
+        body_decrypted: bool,
+
+        pub fn decryptBody(self: *Full) !void {
+            for (self.segment_certification_headers) |segment_header| {
+                if (segment_header.encryption_algorithm != .none) {
+                    // Skip segments which are missing a key/iv
+                    if (segment_header.key_idx == null or segment_header.iv_idx == null) {
+                        continue;
+                    }
+
+                    const key_idx = segment_header.key_idx.?;
+                    const iv_idx = segment_header.iv_idx.?;
+
+                    // Skip segments with invalid key/iv
+                    if (key_idx >= self.certification_header.attr_entry_num or iv_idx >= self.certification_header.attr_entry_num) {
+                        continue;
+                    }
+
+                    if (segment_header.segment_offset > std.math.maxInt(usize) or segment_header.segment_size > std.math.maxInt(usize))
+                        return Error.InvalidPosOrSizeForPlatform;
+
+                    const data = self.cf_data[@intCast(segment_header.segment_offset)..@intCast(segment_header.segment_offset + segment_header.segment_size)];
+
+                    switch (segment_header.encryption_algorithm) {
+                        .aes128_ctr => {
+                            const aes128 = Aes128.initEnc(self.keys[key_idx]);
+                            std.crypto.core.modes.ctr(@TypeOf(aes128), aes128, data, data, self.keys[iv_idx], self.header.endianness());
+                        },
+                        .aes128_cbc_cfb => {
+                            // TODO: lets throw an error so we can hopefully find one of these cbc_cfb SELFs in the wild, and implement support!
+                            return Error.UnsupportedAes128CbcCfbSegment;
+                        },
+                        .none => unreachable,
+                    }
+                }
+            }
+
+            self.body_decrypted = true;
+        }
     };
 
     /// A partially read certified file, returned when a key is missing
