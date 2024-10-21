@@ -16,4 +16,4 @@ A library to decrypt, decompress, and disassemble files used by various Sony sys
 
 ## TODO: selftool
 
-- [ ] Add command to dump info about SELF (shouldn't require any keys to dump basic info)
+- [x] Add command to dump info about SELF (shouldn't require any keys to dump basic info)
