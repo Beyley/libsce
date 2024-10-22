@@ -459,7 +459,7 @@ int aes_setkey_dec( aes_context *ctx, const unsigned char *key, unsigned int key
     *RK++ = *SK++;
     *RK++ = *SK++;
 
-    memset( &cty, 0, sizeof( aes_context ) );
+    libc_memset( &cty, 0, sizeof( aes_context ) );
 
     return( 0 );
 }
@@ -625,13 +625,13 @@ int aes_crypt_cbc( aes_context *ctx,
     {
         while( length > 0 )
         {
-            memcpy( temp, input, 16 );
+            libc_memcpy( temp, input, 16 );
             aes_crypt_ecb( ctx, mode, input, output );
 
             for( i = 0; i < 16; i++ )
                 output[i] = (unsigned char)( output[i] ^ iv[i] );
 
-            memcpy( iv, temp, 16 );
+            libc_memcpy( iv, temp, 16 );
 
             input  += 16;
             output += 16;
@@ -646,7 +646,7 @@ int aes_crypt_cbc( aes_context *ctx,
                 output[i] = (unsigned char)( input[i] ^ iv[i] );
 
             aes_crypt_ecb( ctx, mode, output, output );
-            memcpy( iv, output, 16 );
+            libc_memcpy( iv, output, 16 );
 
             input  += 16;
             output += 16;
