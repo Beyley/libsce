@@ -8,6 +8,10 @@ pub const Error = error{
     BadPs3ElfDigestSize,
     BadNpdrmMagic,
     BadVitaNpdrmMagic,
+    InvalidElfClass,
+    InvalidElfEndian,
+    InvalidElfMagic,
+    InvalidElfVersion,
 } || std.fs.File.Reader.ReadEnumError || std.mem.Allocator.Error || sce.Error;
 
 /// aka self header
@@ -340,7 +344,42 @@ pub const SupplementalHeaderTable = struct {
     }
 };
 
-pub fn read(stream: anytype, allocator: std.mem.Allocator, endianness: std.builtin.Endian) Error!Self {
+pub const SegmentExtendedHeader = struct {
+    pub const Encryption = enum(u64) {
+        unrequested = 0,
+        completed = 1,
+        requested = 2,
+    };
+
+    offset: u64,
+    size: u64,
+    compression: sce.CompressionAlgorithm,
+    unknown: u32,
+    encryption: Encryption,
+
+    pub fn read(allocator: std.mem.Allocator, reader: anytype, elf_header: std.elf.Header, endianness: std.builtin.Endian) ![]SegmentExtendedHeader {
+        const segment_extended_headers = try allocator.alloc(SegmentExtendedHeader, elf_header.phnum);
+        errdefer allocator.free(segment_extended_headers);
+
+        for (segment_extended_headers) |*segment_extended_header| {
+            segment_extended_header.* = try readSingle(reader, endianness);
+        }
+
+        return segment_extended_headers;
+    }
+
+    fn readSingle(reader: anytype, endianness: std.builtin.Endian) !SegmentExtendedHeader {
+        return .{
+            .offset = try reader.readInt(u64, endianness),
+            .size = try reader.readInt(u64, endianness),
+            .compression = try reader.readEnum(sce.CompressionAlgorithm, endianness),
+            .unknown = try reader.readInt(u32, endianness),
+            .encryption = try reader.readEnum(Encryption, endianness),
+        };
+    }
+};
+
+pub fn read(self_data: []const u8, stream: anytype, allocator: std.mem.Allocator, endianness: std.builtin.Endian) Error!Self {
     const reader = stream.reader();
 
     const extended_header = try Self.ExtendedHeader.read(reader, endianness);
@@ -352,17 +391,35 @@ pub fn read(stream: anytype, allocator: std.mem.Allocator, endianness: std.built
     const supplemental_headers = try SupplementalHeaderTable.read(allocator, reader, extended_header, endianness);
     errdefer allocator.free(supplemental_headers);
 
+    if (extended_header.elf_header_offset > std.math.maxInt(usize))
+        return error.InvalidPosOrSizeForPlatform;
+
+    const elf_header_data: [@sizeOf(std.elf.Elf64_Ehdr)]u8 align(@alignOf(std.elf.Elf64_Ehdr)) = self_data[@intCast(extended_header.elf_header_offset)..][0..@sizeOf(std.elf.Elf64_Ehdr)].*;
+
+    // Read the ELF header, as we need to know the amount of program segment headers present to raed the segment extended headers
+    const elf_header = try std.elf.Header.parse(&elf_header_data);
+
+    try stream.seekTo(extended_header.segment_extended_header_offset);
+
+    const segment_extended_headers = try SegmentExtendedHeader.read(allocator, reader, elf_header, endianness);
+    errdefer allocator.free(segment_extended_headers);
+
     return .{
         .extended_header = extended_header,
         .program_identification_header = program_identification_header,
         .supplemental_headers = supplemental_headers,
+        .elf_header = elf_header,
+        .segment_extended_headers = segment_extended_headers,
     };
 }
 
 extended_header: ExtendedHeader,
 program_identification_header: ProgramIdentificationHeader,
 supplemental_headers: []SupplementalHeaderTable.SupplementalHeader,
+elf_header: std.elf.Header,
+segment_extended_headers: []SegmentExtendedHeader,
 
 pub fn deinit(self: Self, allocator: std.mem.Allocator) void {
     allocator.free(self.supplemental_headers);
+    allocator.free(self.segment_extended_headers);
 }

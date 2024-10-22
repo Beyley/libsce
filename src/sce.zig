@@ -89,6 +89,11 @@ pub const SharedSecret = struct {
     }
 };
 
+pub const CompressionAlgorithm = enum(u32) {
+    plain = 1,
+    zlib = 2,
+};
+
 pub const PlaintextCapability = struct {
     ctrl_flag1: u32,
     unknown2: u32,

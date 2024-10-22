@@ -136,6 +136,7 @@ pub const Header = struct {
     }
 };
 
+/// aka metadata info
 pub const EncryptionRootHeader = struct {
     key: [0x10]u8,
     key_pad: [0x10]u8,
@@ -298,11 +299,6 @@ pub const SegmentCertificationHeader = struct {
         aes128_ctr = 3,
     };
 
-    pub const CompressionAlgorithm = enum(u32) {
-        plain = 1,
-        zlib = 2,
-    };
-
     segment_offset: u64,
     segment_size: u64,
     segment_type: SegmentType,
@@ -312,7 +308,7 @@ pub const SegmentCertificationHeader = struct {
     encryption_algorithm: EncryptionAlgorithm,
     key_idx: ?u32,
     iv_idx: ?u32,
-    compression_algorithm: CompressionAlgorithm,
+    compression_algorithm: sce.CompressionAlgorithm,
 
     pub fn byteSize(self: SegmentCertificationHeader) usize {
         _ = self;
@@ -348,7 +344,7 @@ pub const SegmentCertificationHeader = struct {
                 const idx = try reader.readInt(u32, endian);
                 break :blk if (idx == 0xFFFFFFFF) null else idx;
             },
-            .compression_algorithm = try reader.readEnum(CompressionAlgorithm, endian),
+            .compression_algorithm = try reader.readEnum(sce.CompressionAlgorithm, endian),
         };
     }
 };
@@ -445,12 +441,17 @@ pub fn read(
     if (header.category != .signed_elf)
         return Error.OnlySelfSupported;
 
-    // TODO: fSELF file extraction
-    if (header.key_revision == 0x8000)
-        return Error.FakeSelfUnsupported;
-
-    const self = try Self.read(&stream, allocator, endianness);
+    const self = try Self.read(cf_data, &stream, allocator, endianness);
     errdefer self.deinit(allocator);
+
+    // If this is a fake certified file, none of the following contents are present, and there's no encryption
+    if (header.key_revision == 0x8000)
+        return .{
+            .fake = .{
+                .header = header,
+                .contents = .{ .signed_elf = self },
+            },
+        };
 
     const system_key = system_keys.get(.{
         .revision = header.key_revision,
@@ -460,8 +461,9 @@ pub fn read(
         .contents = .{ .signed_elf = self },
     } };
 
-    // TODO: dont read the encryption root header for fSELF files
+    // Seek past the extended header
     try stream.seekTo(header.byteSize() + header.extended_header_size);
+
     // NPDRM applications need to have their encryption root header read differently
     const encryption_root_header = if (header.category == .signed_elf and self.program_identification_header.program_type == .npdrm_application)
         EncryptionRootHeader.readNpdrm(reader, self, rap_path, npdrm_keys, system_key) catch |err| {
@@ -594,7 +596,14 @@ pub const CertifiedFile = union(enum) {
         contents: Contents,
     };
 
+    /// A partially read certified file, returned when a key is missing
+    pub const Fake = struct {
+        header: Header,
+        contents: Contents,
+    };
+
     full: Full,
+    fake: Fake,
     missing_system_key: MissingKey,
     missing_npdrm_key: MissingKey,
 
@@ -606,7 +615,7 @@ pub const CertifiedFile = union(enum) {
                 allocator.free(full.optional_headers);
                 allocator.free(full.keys);
             },
-            .missing_system_key, .missing_npdrm_key => |missing_key| {
+            inline .missing_system_key, .missing_npdrm_key, .fake => |missing_key| {
                 missing_key.contents.deinit(allocator);
             },
         }

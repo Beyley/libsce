@@ -76,14 +76,15 @@ fn extract(allocator: std.mem.Allocator, options: ExtractOptions) !void {
     var read_certified_file = try certified_file.read(allocator, self_data, options.rap_path, system_keys, npdrm_keys);
     defer read_certified_file.deinit(allocator);
 
-    if (read_certified_file != .full) {
+    if (read_certified_file != .full and read_certified_file != .fake) {
+        std.debug.print("wanted to read full CF or fCF, got {s}\n", .{@tagName(read_certified_file)});
         return error.UnableToFullyReadCertifiedFile;
     }
 
     const output = try std.fs.cwd().createFile(options.out_path.?, .{});
     defer output.close();
 
-    try unself.extractSelfToElf(self_data, &read_certified_file.full, output.seekableStream(), output.writer());
+    try unself.extractSelfToElf(self_data, &read_certified_file, output.seekableStream(), output.writer());
 }
 
 fn printInfo(allocator: std.mem.Allocator, options: InfoOptions) !void {
@@ -335,6 +336,27 @@ fn printInfo(allocator: std.mem.Allocator, options: InfoOptions) !void {
                         }
                     }
 
+                    try stdout.writeByte('\n');
+
+                    try stdout.print("# {d} Segment Extended Headers\n", .{self.segment_extended_headers.len});
+                    for (self.segment_extended_headers, 0..) |segment_extended_header, i| {
+                        try stdout.print(
+                            \\## Segment Extended Header {d}
+                            \\- Offset: {d}
+                            \\- Size: {d}
+                            \\- Compression: {s}
+                            \\- Unknown: {d}
+                            \\- Encryption: {s}
+                            \\
+                        , .{
+                            i,
+                            segment_extended_header.offset,
+                            segment_extended_header.size,
+                            @tagName(segment_extended_header.compression),
+                            segment_extended_header.unknown,
+                            @tagName(segment_extended_header.encryption),
+                        });
+                    }
                     try stdout.writeByte('\n');
                 },
                 else => try stdout.print("TODO: Contents type {s}\n", .{@tagName(contents)}),
