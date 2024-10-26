@@ -12,7 +12,7 @@ pub const Error = error{
     InvalidElfEndian,
     InvalidElfMagic,
     InvalidElfVersion,
-} || std.fs.File.Reader.ReadEnumError || std.mem.Allocator.Error || sce.Error;
+} || std.fs.File.Reader.ReadEnumError || std.mem.Allocator.Error || sce.Error || std.meta.IntToEnumError;
 
 /// aka self header
 pub const ExtendedHeader = struct {
@@ -226,7 +226,7 @@ pub const SupplementalHeaderTable = struct {
             version: u32,
             drm_type: sce.DrmType,
             app_type: AppType,
-            content_id: [0x30]u8,
+            content_id: sce.ContentId,
             digest: [0x10]u8,
             cid_fn_hash: [0x10]u8,
             header_hash: [0x10]u8,
@@ -239,7 +239,7 @@ pub const SupplementalHeaderTable = struct {
 
                 return .{
                     .version = try reader.readInt(u32, endian),
-                    .drm_type = try reader.readEnum(sce.DrmType, endian),
+                    .drm_type = try std.meta.intToEnum(sce.DrmType, try reader.readInt(u32, endian)), // this is read as a u32 here, but in other places (like the RIF file, its a u16)
                     .app_type = try reader.readEnum(SupplementalHeader.Ps3Npdrm.AppType, endian),
                     .content_id = try reader.readBytesNoEof(0x30),
                     .digest = try reader.readBytesNoEof(0x10),
@@ -269,7 +269,7 @@ pub const SupplementalHeaderTable = struct {
             finalized_flag: u32,
             drm_type: sce.DrmType,
             padding: u32,
-            content_id: [0x30]u8,
+            content_id: sce.ContentId,
             digest: [0x10]u8,
             padding_78: [0x78]u8,
             sig: sce.Ecdsa224Signature,
@@ -280,7 +280,7 @@ pub const SupplementalHeaderTable = struct {
 
                 return .{
                     .finalized_flag = try reader.readInt(u32, endian),
-                    .drm_type = try reader.readEnum(sce.DrmType, endian),
+                    .drm_type = try std.meta.intToEnum(sce.DrmType, try reader.readInt(u32, endian)), // this is read as a u32 here, but in other places (like the RIF file, its a u16)
                     .padding = try reader.readInt(u32, endian),
                     .content_id = try reader.readBytesNoEof(0x30),
                     .digest = try reader.readBytesNoEof(0x10),

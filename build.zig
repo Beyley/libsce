@@ -7,9 +7,11 @@ pub fn build(b: *std.Build) void {
     const aes = createAes(b, target, optimize, createLibc(b, target, optimize));
     const libsce = createLibsce(b, target, optimize, aes);
     const selftool = createSelftool(b, target, optimize, libsce, aes);
+    const licensetool = createLicensetool(b, target, optimize, libsce);
     const libsce_c_abi = createLibSceCAbi(b, target, optimize, libsce);
 
     b.installArtifact(selftool);
+    b.installArtifact(licensetool);
     b.installArtifact(libsce_c_abi);
 
     const run_selftool = b.addRunArtifact(selftool);
@@ -19,8 +21,18 @@ pub fn build(b: *std.Build) void {
         run_selftool.addArgs(args);
     }
 
-    const run_step = b.step("selftool", "Run the app");
-    run_step.dependOn(&run_selftool.step);
+    const selftool_run_step = b.step("selftool", "Run the app");
+    selftool_run_step.dependOn(&run_selftool.step);
+
+    const run_licensetool = b.addRunArtifact(licensetool);
+    run_licensetool.step.dependOn(b.getInstallStep());
+
+    if (b.args) |args| {
+        run_licensetool.addArgs(args);
+    }
+
+    const licensetool_run_step = b.step("licensetool", "Run the app");
+    licensetool_run_step.dependOn(&run_licensetool.step);
 }
 
 fn createLibSceCAbi(
@@ -121,8 +133,26 @@ fn createSelftool(
     selftool.root_module.addImport("sce", libsce);
     selftool.root_module.addImport("aes", &aes.root_module);
 
-    selftool.root_module.addImport("pretty", b.dependency("pretty", .{ .target = target, .optimize = optimize }).module("pretty"));
     selftool.root_module.addImport("cova", b.dependency("cova", .{ .target = target, .optimize = optimize }).module("cova"));
 
     return selftool;
+}
+
+fn createLicensetool(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    libsce: *std.Build.Module,
+) *std.Build.Step.Compile {
+    const licensetool = b.addExecutable(.{
+        .name = "licensetool",
+        .root_source_file = b.path("licensetool/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    licensetool.root_module.addImport("sce", libsce);
+
+    licensetool.root_module.addImport("cova", b.dependency("cova", .{ .target = target, .optimize = optimize }).module("cova"));
+
+    return licensetool;
 }

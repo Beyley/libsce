@@ -1,5 +1,4 @@
 const std = @import("std");
-const pretty = @import("pretty");
 
 const sce = @import("sce");
 const cova = @import("cova");
