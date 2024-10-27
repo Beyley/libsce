@@ -13,6 +13,8 @@ pub const Error = error{
 
 pub const ContentId = [0x30]u8;
 
+pub const OpenPsid = [0x10]u8;
+
 // NOTE: The size of this type is not fully known, its documented as u32 in `Ps3Npdrm`, and u16 in the `RightsInformationFile`
 /// The type of DRM in use.
 /// See https://www.psdevwiki.com/ps3/NPDRM#DRM_Type
@@ -192,7 +194,7 @@ pub const RightsInformationFile = struct {
         encrypted_rif_key: [0x10]u8,
         unknown_b0: [0x10]u8,
         /// Checked only if DRM Type is network.
-        open_psid: [0x10]u8,
+        open_psid: OpenPsid,
         unknown_d0: [0x10]u8,
         /// Checked only if DRM Type is gamecard_psp2.
         cmd56_handshake_part: [0x14]u8,
@@ -224,7 +226,7 @@ pub const RightsInformationFile = struct {
     /// The DRM type this license is for
     drm_type: DrmType,
     /// NP Account ID (in little-endian) for Network and Local DRM, 8 first bytes of sha-1 of some key for Free DRM.
-    np_account_id: [0x8]u8,
+    np_account_id: u64,
     /// The content ID this license is valid for
     content_id: ContentId,
     /// Encrypted account keyring index for Network and Local DRM, 12 last bytes of sha-1 of some key + 4 bytes of zeroes for Free DRM.
@@ -249,7 +251,7 @@ pub const RightsInformationFile = struct {
             .version = version,
             .license_flags = @bitCast(try reader.readInt(u16, endian)),
             .drm_type = try std.meta.intToEnum(DrmType, try reader.readInt(u16, endian)), // in some places this is defined as u32, however here, its a u16
-            .np_account_id = try reader.readBytesNoEof(fieldSize(RightsInformationFile, "np_account_id")),
+            .np_account_id = try reader.readInt(u64, .little),
             .content_id = try reader.readBytesNoEof(@sizeOf(ContentId)),
             .encrypted_account_keyring_index = try reader.readBytesNoEof(fieldSize(RightsInformationFile, "encrypted_account_keyring_index")),
             .encrypted_rif_key = try reader.readBytesNoEof(fieldSize(RightsInformationFile, "encrypted_rif_key")),
@@ -265,7 +267,7 @@ pub const RightsInformationFile = struct {
                 .provisional_flag = (try reader.readInt(u32, endian)) != 0,
                 .encrypted_rif_key = try reader.readBytesNoEof(fieldSize(VitaOnlyData, "encrypted_rif_key")),
                 .unknown_b0 = try reader.readBytesNoEof(fieldSize(VitaOnlyData, "unknown_b0")),
-                .open_psid = try reader.readBytesNoEof(fieldSize(VitaOnlyData, "open_psid")),
+                .open_psid = try reader.readBytesNoEof(@sizeOf(OpenPsid)),
                 .unknown_d0 = try reader.readBytesNoEof(fieldSize(VitaOnlyData, "unknown_d0")),
                 .cmd56_handshake_part = try reader.readBytesNoEof(fieldSize(VitaOnlyData, "cmd56_handshake_part")),
                 .unknown_index = try reader.readInt(u32, endian),
@@ -273,6 +275,112 @@ pub const RightsInformationFile = struct {
                 .sku_flag = try reader.readInt(u32, endian),
                 .rsa_signature = try Rsa2048Signature.read(reader),
             } else null,
+        };
+    }
+};
+
+pub const ActivationData = struct {
+    pub const Type = enum(u16) {
+        local = 1,
+        _,
+    };
+
+    pub const VersionFlag = enum(u16) {
+        version_1 = 0,
+        version_2 = 1,
+    };
+
+    pub const ParserVersion = enum(u32) {
+        psp_ps3 = 1,
+        vita = 2,
+    };
+
+    pub const VersionSpecificData = union(VersionFlag) {
+        pub const Version1 = struct {
+            unknown_encrypted_data_1: [0x10]u8,
+            unknown_encrypted_data_2: [0x10]u8,
+        };
+
+        pub const Version2 = struct {
+            unknown: [8]u8,
+            padding: [8]u8,
+            /// The start time, in milliseconds
+            start_time: u64,
+            /// The expiration time, in milliseconds
+            expiration_time: ?u64,
+        };
+
+        version_1: Version1,
+        version_2: Version2,
+    };
+
+    pub const KeySizeBytes = 0x10;
+    pub const KeySizeBits = KeySizeBytes * 8;
+
+    pub const PrimaryKeyTableSizeBytes = 0x800;
+    pub const SecondaryKeyTableSizeBytes = 0x650;
+
+    pub const PrimaryKeyTableEntryCount = PrimaryKeyTableSizeBytes / KeySizeBytes;
+    pub const SecondaryKeyTableEntryCount = SecondaryKeyTableSizeBytes / KeySizeBytes;
+
+    /// The activation type of this ACT.DAT file
+    type: Type,
+    /// The version
+    version_flag: VersionFlag,
+    /// The parser version
+    parser_version: ParserVersion,
+    /// The account ID (always little endian) of the owning PSN user
+    account_id: u64,
+    /// Encrypted RIF keys table
+    primary_key_table: [PrimaryKeyTableEntryCount][KeySizeBytes]u8,
+    unknown_1: [0x40]u8,
+    open_psid: OpenPsid,
+    version_specific_data: VersionSpecificData,
+    secondary_table: [SecondaryKeyTableEntryCount][KeySizeBytes]u8,
+    /// RSA Public Key for RIF type 0 and 1
+    rsa_signature: Rsa2048Signature,
+    /// Maybe AES CMAC (0x20 key + 0x20 hash) or AES HMAC.
+    unknown_signature: [0x40]u8,
+    /// pub=vsh_pub, ctype=0x02(vsh_curves)
+    ecdsa_signature: [0x28]u8,
+
+    pub fn read(reader: anytype, endian: std.builtin.Endian) !ActivationData {
+        const activation_type: Type = @enumFromInt(try reader.readInt(u16, endian));
+        const version_flag = try reader.readEnum(VersionFlag, endian);
+        const parser_version = try reader.readEnum(ParserVersion, endian);
+
+        return .{
+            .type = activation_type,
+            .version_flag = version_flag,
+            .parser_version = parser_version,
+            .account_id = try reader.readInt(u64, .little), // always little endian
+            .primary_key_table = @bitCast(try reader.readBytesNoEof(PrimaryKeyTableSizeBytes)),
+            .unknown_1 = try reader.readBytesNoEof(fieldSize(ActivationData, "unknown_1")),
+            .open_psid = try reader.readBytesNoEof(@sizeOf(OpenPsid)),
+            .version_specific_data = switch (version_flag) {
+                .version_1 => .{
+                    .version_1 = .{
+                        .unknown_encrypted_data_1 = try reader.readBytesNoEof(fieldSize(VersionSpecificData.Version1, "unknown_encrypted_data_1")),
+                        .unknown_encrypted_data_2 = try reader.readBytesNoEof(fieldSize(VersionSpecificData.Version1, "unknown_encrypted_data_2")),
+                    },
+                },
+                .version_2 => .{
+                    .version_2 = .{
+                        .unknown = try reader.readBytesNoEof(fieldSize(VersionSpecificData.Version2, "unknown")),
+                        .padding = try reader.readBytesNoEof(fieldSize(VersionSpecificData.Version2, "padding")),
+                        .start_time = try reader.readInt(u64, endian),
+                        .expiration_time = blk: {
+                            const time = try reader.readInt(u64, endian);
+
+                            break :blk if (time == 0) null else time;
+                        },
+                    },
+                },
+            },
+            .secondary_table = @bitCast(try reader.readBytesNoEof(SecondaryKeyTableSizeBytes)),
+            .rsa_signature = try Rsa2048Signature.read(reader),
+            .unknown_signature = try reader.readBytesNoEof(fieldSize(ActivationData, "unknown_signature")),
+            .ecdsa_signature = try reader.readBytesNoEof(fieldSize(ActivationData, "ecdsa_signature")),
         };
     }
 };
