@@ -15,6 +15,8 @@ pub const ContentId = [0x30]u8;
 
 pub const OpenPsid = [0x10]u8;
 
+const log = std.log.scoped(.sce);
+
 // NOTE: The size of this type is not fully known, its documented as u32 in `Ps3Npdrm`, and u16 in the `RightsInformationFile`
 /// The type of DRM in use.
 /// See https://www.psdevwiki.com/ps3/NPDRM#DRM_Type
@@ -72,8 +74,10 @@ pub const Ecdsa160Signature = struct {
             .padding = try reader.readBytesNoEof(fieldSize(Ecdsa160Signature, "padding")),
         };
 
-        if (!std.mem.allEqual(u8, &signature.padding, 0))
+        if (!std.mem.allEqual(u8, &signature.padding, 0)) {
+            log.err("Failed to read ECDSA160 signature, padding has invalid bytes. {x}", .{signature.padding});
             return Error.InvalidEcdsa160SignaturePadding;
+        }
 
         return signature;
     }

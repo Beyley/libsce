@@ -4,6 +4,8 @@ const sce = @import("sce.zig");
 
 const Self = @This();
 
+const log = std.log.scoped(.self);
+
 pub const Error = error{
     BadPs3ElfDigestSize,
     BadNpdrmMagic,
@@ -209,7 +211,10 @@ pub const SupplementalHeaderTable = struct {
                         .elf_digest = try reader.readBytesNoEof(0x14),
                         .required_system_version = try reader.readInt(u64, endian),
                     } },
-                    else => return Error.BadPs3ElfDigestSize,
+                    else => {
+                        log.err("PS3 elf digest header has invalid size {d}", .{size});
+                        return Error.BadPs3ElfDigestSize;
+                    },
                 };
             }
         };
@@ -234,8 +239,11 @@ pub const SupplementalHeaderTable = struct {
             limited_time_end: u64,
 
             pub fn read(reader: anytype, endian: std.builtin.Endian) Error!Ps3Npdrm {
-                if (!std.mem.eql(u8, &(try reader.readBytesNoEof(4)), "NPD\x00"))
+                const magic = try reader.readBytesNoEof(4);
+                if (!std.mem.eql(u8, &magic, "NPD\x00")) {
+                    log.err("PS3 NPDRM supplemental header has invalid magic of {x}", .{magic});
                     return Error.BadNpdrmMagic;
+                }
 
                 return .{
                     .version = try reader.readInt(u32, endian),
@@ -275,8 +283,11 @@ pub const SupplementalHeaderTable = struct {
             sig: sce.Ecdsa224Signature,
 
             pub fn read(reader: anytype, endian: std.builtin.Endian) Error!VitaNpdrm {
-                if (!std.mem.eql(u8, &(try reader.readBytesNoEof(4)), "\x7FDRM"))
+                const magic = try reader.readBytesNoEof(4);
+                if (!std.mem.eql(u8, &magic, "\x7FDRM")) {
+                    log.err("Vita NPDRM supplemental header has invalid magic, {x}", .{magic});
                     return Error.BadVitaNpdrmMagic;
+                }
 
                 return .{
                     .finalized_flag = try reader.readInt(u32, endian),
@@ -382,27 +393,41 @@ pub const SegmentExtendedHeader = struct {
 pub fn read(self_data: []const u8, stream: anytype, allocator: std.mem.Allocator, endianness: std.builtin.Endian) Error!Self {
     const reader = stream.reader();
 
+    log.info("Reading extended SELF contents", .{});
+
     const extended_header = try Self.ExtendedHeader.read(reader, endianness);
+
+    log.info("Read extended header", .{});
 
     try stream.seekTo(extended_header.program_identification_header_offset);
     const program_identification_header = try ProgramIdentificationHeader.read(reader, endianness);
+
+    log.info("Read program identification header", .{});
 
     try stream.seekTo(extended_header.supplemental_header_offset);
     const supplemental_headers = try SupplementalHeaderTable.read(allocator, reader, extended_header, endianness);
     errdefer allocator.free(supplemental_headers);
 
-    if (extended_header.elf_header_offset > std.math.maxInt(usize))
-        return error.InvalidPosOrSizeForPlatform;
+    log.info("Read {d} supplemental headers", .{supplemental_headers.len});
+
+    if (extended_header.elf_header_offset > std.math.maxInt(usize)) {
+        log.err("Extended header had invalid ELF header offset {d}. Maybe a parsing error or corrupted file?", .{extended_header.elf_header_offset});
+        return Error.InvalidPosOrSizeForPlatform;
+    }
 
     const elf_header_data: [@sizeOf(std.elf.Elf64_Ehdr)]u8 align(@alignOf(std.elf.Elf64_Ehdr)) = self_data[@intCast(extended_header.elf_header_offset)..][0..@sizeOf(std.elf.Elf64_Ehdr)].*;
 
     // Read the ELF header, as we need to know the amount of program segment headers present to raed the segment extended headers
     const elf_header = try std.elf.Header.parse(&elf_header_data);
 
+    log.info("Parsed ELF header", .{});
+
     try stream.seekTo(extended_header.segment_extended_header_offset);
 
     const segment_extended_headers = try SegmentExtendedHeader.read(allocator, reader, elf_header, endianness);
     errdefer allocator.free(segment_extended_headers);
+
+    log.info("Read {d} segment extended headers", .{segment_extended_headers.len});
 
     return .{
         .extended_header = extended_header,

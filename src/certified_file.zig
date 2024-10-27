@@ -10,6 +10,8 @@ const Self = @import("Self.zig");
 
 const Aes128 = std.crypto.core.aes.Aes128;
 
+const log = std.log.scoped(.certified_file);
+
 pub const Error = error{
     InvalidCertifiedFileMagic,
     OnlySelfSupported,
@@ -17,7 +19,7 @@ pub const Error = error{
     MissingNpdrmSupplementalHeader,
     MissingNpdrmKlicKey,
     MissingNpdrmKlicFreeKey,
-    MissingRap,
+    MissingLicense,
     InvalidRapFile,
     UnknownNpdrmType,
     OptionalHeaderSizeMismatch,
@@ -113,8 +115,10 @@ pub const Header = struct {
                 .big
             else if (std.mem.eql(u8, &magic, "\x00ECS"))
                 .little
-            else
+            else {
+                log.err("File has unknown magic of {x}", .{magic});
                 return Error.InvalidCertifiedFileMagic;
+            };
         };
 
         const version = try reader.readEnum(Version, endian);
@@ -168,6 +172,8 @@ pub const EncryptionRootHeader = struct {
         system_key: system_keyset.Key,
         endian: std.builtin.Endian,
     ) Error!EncryptionRootHeader {
+        log.info("Reading NPDRM encryption root header", .{});
+
         // Search for the PS3 NPDRM header
         const npdrm_header = blk: {
             for (self.supplemental_headers) |supplemental_header| {
@@ -175,36 +181,42 @@ pub const EncryptionRootHeader = struct {
                     break :blk supplemental_header.ps3_npdrm;
             }
 
+            log.err("Attempted to read NPDRM encryption root header, but SELF has no PS3 NPDRM supplemental header", .{});
             return Error.MissingNpdrmSupplementalHeader;
         };
 
+        log.info("Got NPDRM header with content ID {s}", .{npdrm_header.content_id});
+
         // Get the key used to decrypt the NPDRM key
-        const klic_key = (npdrm_keys.get(.klic_key) orelse return Error.MissingNpdrmKlicKey).aes;
+        const klic_key = try npdrm_keyset.getKeyOrError(npdrm_keys, .klic_key, Error.MissingNpdrmKlicKey);
+
         // Read the NPDRM key
-        var npdrm_key: npdrm_keyset.Key.AesKey =
+        var npdrm_key: [0x10]u8 =
             if (npdrm_header.drm_type == .free)
             // If the CF uses the free NPDRM key, use that
-            (npdrm_keys.get(.klic_free) orelse return Error.MissingNpdrmKlicFreeKey).aes
+            try npdrm_keyset.getKeyOrError(npdrm_keys, .klic_free, Error.MissingNpdrmKlicFreeKey)
         else if (npdrm_header.drm_type == .local)
             // If the CF uses a local license, we need to load then decrypt that
-            .{
-                .erk = switch (license_data) {
-                    .none => return Error.MissingRap,
-                    .rap => |rap| try npdrm_keyset.rapToKlicensee(rap, npdrm_keys),
-                    .rif => |rif| try npdrm_keyset.loadKlicensee(rif.rif, rif.act_dat, rif.idps, npdrm_keys, endian),
+            switch (license_data) {
+                .none => {
+                    log.err("Wanted a license to decrypt encryption root header, but none was provided", .{});
+                    return Error.MissingLicense;
                 },
-                .riv = .{0} ** 0x10,
+                .rap => |rap| try npdrm_keyset.rapToKlicensee(rap, npdrm_keys),
+                .rif => |rif| try npdrm_keyset.loadKlicensee(rif.rif, rif.act_dat, rif.idps, npdrm_keys, endian),
             }
         else {
-            // Return an error if we can't handle this NPDRM type
+            log.err("Unhandled DRM type {s}", .{@tagName(npdrm_header.drm_type)});
             return Error.UnknownNpdrmType;
         };
 
         var aes_ctxt: aes.aes_context = undefined;
 
         // Decrypt the npdrm key
-        _ = aes.aes_setkey_dec(&aes_ctxt, &klic_key.erk, @bitSizeOf(@TypeOf(klic_key.erk)));
-        _ = aes.aes_crypt_ecb(&aes_ctxt, aes.AES_DECRYPT, &npdrm_key.erk, &npdrm_key.erk);
+        _ = aes.aes_setkey_dec(&aes_ctxt, &klic_key, @bitSizeOf(@TypeOf(klic_key)));
+        _ = aes.aes_crypt_ecb(&aes_ctxt, aes.AES_DECRYPT, &npdrm_key, &npdrm_key);
+
+        log.info("Decrypted NPDRM key", .{});
 
         // Read the encrypted header
         var header: [0x40]u8 = undefined;
@@ -212,13 +224,17 @@ pub const EncryptionRootHeader = struct {
 
         // Remove the npdrm layer
         var iv: [0x10]u8 = .{0} ** 0x10;
-        _ = aes.aes_setkey_dec(&aes_ctxt, &npdrm_key.erk, @bitSizeOf(@TypeOf(npdrm_key.erk)));
+        _ = aes.aes_setkey_dec(&aes_ctxt, &npdrm_key, @bitSizeOf(@TypeOf(npdrm_key)));
         _ = aes.aes_crypt_cbc(&aes_ctxt, aes.AES_DECRYPT, header.len, &iv, &header, &header);
+
+        log.info("Removed NPDRM layer from encryption root header", .{});
 
         // Remove the system encryption layer
         iv = system_key.reset_initialization_vector;
         _ = aes.aes_setkey_dec(&aes_ctxt, &system_key.encryption_round_key, @bitSizeOf(@TypeOf(system_key.encryption_round_key)));
         _ = aes.aes_crypt_cbc(&aes_ctxt, aes.AES_DECRYPT, header.len, &iv, &header, &header);
+
+        log.info("Removed system layer from encryption root header", .{});
 
         const ret: EncryptionRootHeader = .{
             .key = header[0..0x10].*,
@@ -229,6 +245,7 @@ pub const EncryptionRootHeader = struct {
 
         // Ensure padding is all zeroes
         if (!std.mem.allEqual(u8, &ret.iv_pad, 0) or !std.mem.allEqual(u8, &ret.key_pad, 0)) {
+            log.err("Encryption root header padding is not all zeroes! This is likely a decryption error, please make sure the right license is in use!", .{});
             return Error.InvalidEncryptionRootHeaderPadding;
         }
 
@@ -236,6 +253,8 @@ pub const EncryptionRootHeader = struct {
     }
 
     pub fn read(reader: anytype, key: system_keyset.Key) Error!EncryptionRootHeader {
+        log.info("Reading non-NPDRM encryption root header", .{});
+
         var header: [0x40]u8 = undefined;
         try reader.readNoEof(&header);
 
@@ -246,6 +265,8 @@ pub const EncryptionRootHeader = struct {
         _ = aes.aes_setkey_dec(&ctx, &key.encryption_round_key, key.encryption_round_key.len * 8);
         _ = aes.aes_crypt_cbc(&ctx, aes.AES_DECRYPT, header.len, &iv, &header, &header);
 
+        log.info("Removed system layer from encryption root header", .{});
+
         const ret: EncryptionRootHeader = .{
             .key = header[0..0x10].*,
             .key_pad = header[0x10..0x20].*,
@@ -255,6 +276,7 @@ pub const EncryptionRootHeader = struct {
 
         // Ensure padding is all zeroes
         if (!std.mem.allEqual(u8, &ret.iv_pad, 0) or !std.mem.allEqual(u8, &ret.key_pad, 0)) {
+            log.err("Encryption root header padding is not all zeroes! This is likely a decryption error, please make sure the right license is in use!", .{});
             return Error.InvalidEncryptionRootHeaderPadding;
         }
 
@@ -374,8 +396,10 @@ pub const OptionalHeader = union(Type) {
     pub const Attribute = [0x20]u8;
 
     pub fn read(raw_reader: anytype, allocator: std.mem.Allocator, certifiction_header: CertificationHeader, endian: std.builtin.Endian) Error![]OptionalHeader {
-        if (certifiction_header.optional_header_size == 0)
+        if (certifiction_header.optional_header_size == 0) {
+            log.info("Optional header size is zero, returning empty array", .{});
             return &.{};
+        }
 
         var optional_headers = std.ArrayList(OptionalHeader).init(allocator);
         errdefer optional_headers.deinit();
@@ -404,14 +428,18 @@ pub const OptionalHeader = union(Type) {
 
             total_read += counting_reader.bytes_read;
 
-            if (counting_reader.bytes_read - read_start != size)
+            if (counting_reader.bytes_read - read_start != size) {
+                log.err("Failed to read entire optional header, size mismatch. Read {d}, size {d}", .{ counting_reader.bytes_read - read_start, size });
                 return Error.OptionalHeaderSizeMismatch;
+            }
 
             if (!next) break;
         }
 
-        if (total_read != certifiction_header.optional_header_size)
+        if (total_read != certifiction_header.optional_header_size) {
+            log.err("Total amount of bytes read does not match specified size of optional header table, read {d}, size {d}", .{ total_read, certifiction_header.optional_header_size });
             return Error.OptionalHeaderTableSizeMismatch;
+        }
 
         return optional_headers.toOwnedSlice();
     }
@@ -428,7 +456,10 @@ pub const Signature = union(SigningAlgorithm) {
         return switch (certification_header.sign_algorithm) {
             .ecdsa160 => .{ .ecdsa160 = try sce.Ecdsa160Signature.read(reader) },
             .rsa2048 => .{ .rsa2048 = try sce.Rsa2048Signature.read(reader) },
-            else => Error.UnsupportedSignatureType, // https://www.psdevwiki.com/ps3/Certified_File#Signature
+            else => { // https://www.psdevwiki.com/ps3/Certified_File#Signature
+                log.err("Unsupported signature type {s}", .{@tagName(certification_header.sign_algorithm)});
+                return Error.UnsupportedSignatureType;
+            },
         };
     }
 };
@@ -444,32 +475,47 @@ pub fn read(
 
     const reader = stream.reader();
 
+    log.info("Reading CF with size {d}", .{cf_data.len});
+
     const header = try Header.read(reader);
     const endianness = header.endianness();
 
+    log.info("Read CF header with version {s}", .{@tagName(header.version)});
+
     // TODO: non-SELF file extraction
-    if (header.category != .signed_elf)
+    if (header.category != .signed_elf) {
+        log.err("non-SELF certified file {s} is unsupported", .{@tagName(header.category)});
         return Error.OnlySelfSupported;
+    }
 
     const self = try Self.read(cf_data, &stream, allocator, endianness);
     errdefer self.deinit(allocator);
 
+    log.info("Read SELF data", .{});
+
     // If this is a fake certified file, none of the following contents are present, and there's no encryption
-    if (header.key_revision == 0x8000)
+    if (header.key_revision == 0x8000) {
+        log.info("Found fSELF file, all work done", .{});
         return .{
             .fake = .{
                 .header = header,
                 .contents = .{ .signed_elf = self },
             },
         };
+    }
 
     const system_key = system_keys.get(.{
         .revision = header.key_revision,
         .self_type = self.program_identification_header.program_type,
-    }) orelse return .{ .missing_system_key = .{
-        .header = header,
-        .contents = .{ .signed_elf = self },
-    } };
+    }) orelse {
+        log.err("Missing system key for revision {d} and self type {s}, possibly corrupt CF file?", .{ header.key_revision, @tagName(self.program_identification_header.program_type) });
+        return .{ .missing_system_key = .{
+            .header = header,
+            .contents = .{ .signed_elf = self },
+        } };
+    };
+
+    log.info("Acquired system key for revision {d} and self type {s}", .{ header.key_revision, @tagName(self.program_identification_header.program_type) });
 
     // Seek past the extended header
     try stream.seekTo(header.byteSize() + header.extended_header_size);
@@ -480,7 +526,7 @@ pub fn read(
             return switch (err) {
                 Error.MissingNpdrmKlicKey,
                 Error.MissingNpdrmKlicFreeKey,
-                Error.MissingRap,
+                Error.MissingLicense,
                 Error.UnknownNpdrmType,
                 Error.InvalidEncryptionRootHeaderPadding,
                 Error.MissingRapInitKey,
@@ -499,24 +545,34 @@ pub fn read(
     else
         try EncryptionRootHeader.read(reader, system_key);
 
+    log.info("Read encryption root header", .{});
+
     { // Decrypt all bytes from now until the start of the encapsulated file
         const pos = try stream.getPos();
         const len = header.file_offset - (header.byteSize() + header.extended_header_size + encryption_root_header.byteSize());
 
-        if (pos > std.math.maxInt(usize) or len > std.math.maxInt(usize))
+        if (pos > std.math.maxInt(usize) or len > std.math.maxInt(usize)) {
+            log.err("Full header decryption cannot continue, invalid pos/len, {d}/{d}", .{ pos, len });
             return Error.InvalidPosOrSizeForPlatform;
+        }
 
         const data = cf_data[@intCast(pos)..@intCast(pos + len)];
 
         // decrypt the certification header, segment certification header, and keys
         const aes128 = Aes128.initEnc(encryption_root_header.key);
         std.crypto.core.modes.ctr(@TypeOf(aes128), aes128, data, data, encryption_root_header.iv, endianness);
+
+        log.info("Decrypted entire CF header", .{});
     }
 
     const certification_header = try CertificationHeader.read(reader, endianness);
 
+    log.info("Read certification header", .{});
+
     const segment_certification_headers = try SegmentCertificationHeader.read(reader, allocator, certification_header, endianness);
     errdefer allocator.free(segment_certification_headers);
+
+    log.info("Read {d} segment certification headers", .{segment_certification_headers.len});
 
     // TODO: what the hell is psdevwiki talking about with "attributes"?
     //       we are following what RPCS3/scetool does by reading these as a series of 16-byte keys
@@ -526,10 +582,18 @@ pub fn read(
     errdefer allocator.free(keys);
     for (keys) |*key| try reader.readNoEof(key);
 
+    log.info("Read {d} CF keys", .{keys.len});
+
     const optional_headers = try OptionalHeader.read(reader, allocator, certification_header, endianness);
     errdefer allocator.free(optional_headers);
 
+    log.info("Read {d} optional headers", .{optional_headers.len});
+
     const signature = try Signature.read(reader, certification_header);
+
+    log.info("Read signature", .{});
+
+    log.info("Finished reading CF", .{});
 
     return .{
         .full = .{
@@ -564,7 +628,9 @@ pub const CertifiedFile = union(enum) {
         body_decrypted: bool,
 
         pub fn decryptBody(self: *Full) !void {
-            for (self.segment_certification_headers) |segment_header| {
+            log.info("Decrypting CF body", .{});
+
+            for (self.segment_certification_headers, 0..) |segment_header, i| {
                 if (segment_header.encryption_algorithm != .none) {
                     // Skip segments which are missing a key/iv
                     if (segment_header.key_idx == null or segment_header.iv_idx == null) {
@@ -579,8 +645,10 @@ pub const CertifiedFile = union(enum) {
                         continue;
                     }
 
-                    if (segment_header.segment_offset > std.math.maxInt(usize) or segment_header.segment_size > std.math.maxInt(usize))
+                    if (segment_header.segment_offset > std.math.maxInt(usize) or segment_header.segment_size > std.math.maxInt(usize)) {
+                        log.err("Unable to decrypt segment {d}, offset ({d}) or size ({d}) is invalid", .{ i, segment_header.segment_offset, segment_header.segment_size });
                         return Error.InvalidPosOrSizeForPlatform;
+                    }
 
                     const data = self.cf_data[@intCast(segment_header.segment_offset)..@intCast(segment_header.segment_offset + segment_header.segment_size)];
 
@@ -588,9 +656,11 @@ pub const CertifiedFile = union(enum) {
                         .aes128_ctr => {
                             const aes128 = Aes128.initEnc(self.keys[key_idx]);
                             std.crypto.core.modes.ctr(@TypeOf(aes128), aes128, data, data, self.keys[iv_idx], self.header.endianness());
+                            log.info("Decrypted segment {d} using aes128_ctr", .{i});
                         },
                         .aes128_cbc_cfb => {
                             // TODO: lets throw an error so we can hopefully find one of these cbc_cfb SELFs in the wild, and implement support!
+                            log.err("Unable to decrypt segment {d}, as it uses aes128_cbc_cfb encryption. *Please* let us know what game triggers this error!", .{i});
                             return Error.UnsupportedAes128CbcCfbSegment;
                         },
                         .none => unreachable,

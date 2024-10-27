@@ -3,6 +3,8 @@ const aes = @import("aes");
 
 const sce = @import("sce.zig");
 
+const log = std.log.scoped(.npdrm_keyset);
+
 pub const KeyType = enum {
     tid,
     ci,
@@ -105,20 +107,34 @@ pub fn read(allocator: std.mem.Allocator, json: []const u8) Error!KeySet {
     return keyset;
 }
 
+pub fn getKeyOrError(keyset: KeySet, comptime key_type: KeyType, err_ret: anytype) ![0x10]u8 {
+    if (@typeInfo(@TypeOf(err_ret)) != .error_set)
+        @compileError("Error return value must be an error!");
+
+    return (keyset.get(key_type) orelse {
+        log.err("Missing " ++ @tagName(key_type) ++ " key", .{});
+        return err_ret;
+    }).aes.erk;
+}
+
 pub fn rapToKlicensee(orig_rap: [0x10]u8, keyset: KeySet) Error![0x10]u8 {
     var aes_ctxt: aes.aes_context = undefined;
 
     var rap = orig_rap;
 
-    const rap_init = (keyset.get(.rap_init) orelse return Error.MissingRapInitKey).aes.erk;
+    const rap_init = try getKeyOrError(keyset, .rap_init, Error.MissingRapInitKey);
+
+    log.info("Loading Klicensee from RAP", .{});
 
     // initial decrypt
     _ = aes.aes_setkey_dec(&aes_ctxt, &rap_init, @bitSizeOf(@TypeOf(rap)));
     _ = aes.aes_crypt_ecb(&aes_ctxt, aes.AES_DECRYPT, &rap, &rap);
 
-    const pbox = (keyset.get(.rap_pbox) orelse return Error.MissingRapPBoxKey).aes.erk;
-    const e1 = (keyset.get(.rap_e1) orelse return Error.MissingRapE1Key).aes.erk;
-    const e2 = (keyset.get(.rap_e2) orelse return Error.MissingRapE2Key).aes.erk;
+    log.info("Initial RAP decryption complete", .{});
+
+    const pbox = try getKeyOrError(keyset, .rap_pbox, Error.MissingRapPBoxKey);
+    const e1 = try getKeyOrError(keyset, .rap_e1, Error.MissingRapE1Key);
+    const e2 = try getKeyOrError(keyset, .rap_e2, Error.MissingRapE2Key);
 
     for (0..5) |_| {
         for (0..16) |i| {
@@ -149,12 +165,16 @@ pub fn rapToKlicensee(orig_rap: [0x10]u8, keyset: KeySet) Error![0x10]u8 {
         }
     }
 
+    log.info("Secondary RAP decryption complete", .{});
+
     return rap;
 }
 
 pub fn loadKlicensee(rif: sce.RightsInformationFile, act_dat: sce.ActivationData, idps: [0x10]u8, keyset: KeySet, endian: std.builtin.Endian) Error![0x10]u8 {
-    const idps_const_key = (keyset.get(.idps_const) orelse return Error.MissingIdpsConstKey).aes.erk;
-    const rif_key = (keyset.get(.rif_key) orelse return Error.MissingRifKey).aes.erk;
+    const idps_const_key = try getKeyOrError(keyset, .idps_const, Error.MissingIdpsConstKey);
+    const rif_key = try getKeyOrError(keyset, .rif_key, Error.MissingRifKey);
+
+    log.info("Loading Klicensee from RIF + act.dat + IDPS, RIF content ID: {s}", .{rif.content_id});
 
     var aes_ctx: aes.aes_context = undefined;
 
@@ -170,11 +190,15 @@ pub fn loadKlicensee(rif: sce.RightsInformationFile, act_dat: sce.ActivationData
         const keyring_index = std.mem.readInt(u32, &decrypted_account_keyring_index[12..][0..4].*, endian);
 
         // This is likely a decryption issue, bad key maybe?
-        if (keyring_index >= act_dat.primary_key_table.len)
-            return error.RifKeyIndexOutOfBounds;
+        if (keyring_index >= act_dat.primary_key_table.len) {
+            log.err("Index {d} is out of bound of ACT.DAT keyring, this is likely a decryption error, maybe rif_key is wrong?", .{keyring_index});
+            return Error.RifKeyIndexOutOfBounds;
+        }
 
         break :blk act_dat.primary_key_table[keyring_index];
     };
+
+    log.info("Acquired and decrypted first layer of ACT.DAT key encryption", .{});
 
     // Encrypt the constant IDPS key with the console's IDPS
     const idps_key = blk: {
@@ -184,6 +208,8 @@ pub fn loadKlicensee(rif: sce.RightsInformationFile, act_dat: sce.ActivationData
         break :blk idps_key;
     };
 
+    log.info("Encrypted constant IDPS key with console IDPS", .{});
+
     // Decrypt the account key with the IDPS key to get the Klicensee key
     const klicensee_key = blk: {
         var klicensee_key: [0x10]u8 = undefined;
@@ -192,9 +218,13 @@ pub fn loadKlicensee(rif: sce.RightsInformationFile, act_dat: sce.ActivationData
         break :blk klicensee_key;
     };
 
+    log.info("Decrypted ACT.DAT key into Klicensee key", .{});
+
     // Decrypt the Klicensee
     var klicensee: [0x10]u8 = undefined;
     _ = aes.aes_setkey_dec(&aes_ctx, &klicensee_key, @bitSizeOf(@TypeOf(klicensee_key)));
     _ = aes.aes_crypt_ecb(&aes_ctx, aes.AES_DECRYPT, &rif.encrypted_rif_key, &klicensee);
+
+    log.info("Decrypted Klicensee from RIF", .{});
     return klicensee;
 }
