@@ -8,7 +8,7 @@ A library to decrypt, decompress, and disassemble files used by various Sony sys
 
 ## TODO
 
-- [ ] RIF + act.dat + IDPS support for decrypting digital copies
+- [x] RIF + act.dat + IDPS support for decrypting digital copies
 - [x] fSELF extraction
 - [x] Remove `unreachable`/`panic` from as many places as possible
 - [ ] (f)SELF/CF creation/encryption

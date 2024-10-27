@@ -18,7 +18,7 @@ pub const Error = error{
     MissingNpdrmKlicKey,
     MissingNpdrmKlicFreeKey,
     MissingRap,
-    InvalidRap,
+    InvalidRapFile,
     UnknownNpdrmType,
     OptionalHeaderSizeMismatch,
     OptionalHeaderTableSizeMismatch,
@@ -136,6 +136,18 @@ pub const Header = struct {
     }
 };
 
+pub const LicenseData = union(enum) {
+    pub const Rif = struct {
+        rif: sce.RightsInformationFile,
+        act_dat: sce.ActivationData,
+        idps: [0x10]u8,
+    };
+
+    rap: [0x10]u8,
+    rif: Rif,
+    none: void,
+};
+
 /// aka metadata info
 pub const EncryptionRootHeader = struct {
     key: [0x10]u8,
@@ -151,9 +163,10 @@ pub const EncryptionRootHeader = struct {
     pub fn readNpdrm(
         reader: anytype,
         self: Self,
-        rap_path: ?[]const u8,
+        license_data: LicenseData,
         npdrm_keys: npdrm_keyset.KeySet,
         system_key: system_keyset.Key,
+        endian: std.builtin.Endian,
     ) Error!EncryptionRootHeader {
         // Search for the PS3 NPDRM header
         const npdrm_header = blk: {
@@ -172,20 +185,17 @@ pub const EncryptionRootHeader = struct {
             if (npdrm_header.drm_type == .free)
             // If the CF uses the free NPDRM key, use that
             (npdrm_keys.get(.klic_free) orelse return Error.MissingNpdrmKlicFreeKey).aes
-        else if (npdrm_header.drm_type == .local) blk: {
+        else if (npdrm_header.drm_type == .local)
             // If the CF uses a local license, we need to load then decrypt that
-
-            // TODO: RIF+act.dat+IDPS reading
-            var rap_file: [0x10]u8 = undefined;
-            if ((try std.fs.cwd().readFile(rap_path orelse return Error.MissingRap, &rap_file)).len != rap_file.len)
-                return Error.InvalidRap;
-
-            // Convert the RAP file to a Klicensee
-            break :blk .{
-                .erk = try npdrm_keyset.rapToKlicensee(rap_file, npdrm_keys),
+            .{
+                .erk = switch (license_data) {
+                    .none => return Error.MissingRap,
+                    .rap => |rap| try npdrm_keyset.rapToKlicensee(rap, npdrm_keys),
+                    .rif => |rif| try npdrm_keyset.loadKlicensee(rif.rif, rif.act_dat, rif.idps, npdrm_keys, endian),
+                },
                 .riv = .{0} ** 0x10,
-            };
-        } else {
+            }
+        else {
             // Return an error if we can't handle this NPDRM type
             return Error.UnknownNpdrmType;
         };
@@ -426,7 +436,7 @@ pub const Signature = union(SigningAlgorithm) {
 pub fn read(
     allocator: std.mem.Allocator,
     cf_data: []u8,
-    rap_path: ?[]const u8,
+    license_data: LicenseData,
     system_keys: system_keyset.KeySet,
     npdrm_keys: npdrm_keyset.KeySet,
 ) Error!CertifiedFile {
@@ -466,7 +476,7 @@ pub fn read(
 
     // NPDRM applications need to have their encryption root header read differently
     const encryption_root_header = if (header.category == .signed_elf and self.program_identification_header.program_type == .npdrm_application)
-        EncryptionRootHeader.readNpdrm(reader, self, rap_path, npdrm_keys, system_key) catch |err| {
+        EncryptionRootHeader.readNpdrm(reader, self, license_data, npdrm_keys, system_key, endianness) catch |err| {
             return switch (err) {
                 Error.MissingNpdrmKlicKey,
                 Error.MissingNpdrmKlicFreeKey,
@@ -477,6 +487,8 @@ pub fn read(
                 Error.MissingRapPBoxKey,
                 Error.MissingRapE1Key,
                 Error.MissingRapE2Key,
+                Error.MissingRifKey,
+                Error.MissingIdpsConstKey,
                 => .{ .missing_npdrm_key = .{
                     .header = header,
                     .contents = .{ .signed_elf = self },

@@ -65,7 +65,7 @@ fn getContentId(allocator: std.mem.Allocator, cf_data: []u8) !?sce.ContentId {
     defer npdrm_keys.deinit();
 
     // Read the certified file
-    const certified_file = try sce.certified_file.read(allocator, cf_data, null, system_keys, npdrm_keys);
+    const certified_file = try sce.certified_file.read(allocator, cf_data, .none, system_keys, npdrm_keys);
     defer certified_file.deinit(allocator);
 
     switch (certified_file) {

@@ -1,6 +1,7 @@
 const std = @import("std");
-
 const aes = @import("aes");
+
+const sce = @import("sce.zig");
 
 pub const KeyType = enum {
     tid,
@@ -56,6 +57,9 @@ pub const Error = error{
     MissingRapPBoxKey,
     MissingRapE1Key,
     MissingRapE2Key,
+    MissingIdpsConstKey,
+    MissingRifKey,
+    RifKeyIndexOutOfBounds,
 } || std.json.ParseError(std.json.Scanner);
 
 pub fn read(allocator: std.mem.Allocator, json: []const u8) Error!KeySet {
@@ -146,4 +150,51 @@ pub fn rapToKlicensee(orig_rap: [0x10]u8, keyset: KeySet) Error![0x10]u8 {
     }
 
     return rap;
+}
+
+pub fn loadKlicensee(rif: sce.RightsInformationFile, act_dat: sce.ActivationData, idps: [0x10]u8, keyset: KeySet, endian: std.builtin.Endian) Error![0x10]u8 {
+    const idps_const_key = (keyset.get(.idps_const) orelse return Error.MissingIdpsConstKey).aes.erk;
+    const rif_key = (keyset.get(.rif_key) orelse return Error.MissingRifKey).aes.erk;
+
+    var aes_ctx: aes.aes_context = undefined;
+
+    // Acquire the ACT.DAT key
+    const act_dat_key = blk: {
+        var decrypted_account_keyring_index: [0x10]u8 = undefined;
+
+        // Decrypt the account keyring index
+        _ = aes.aes_setkey_dec(&aes_ctx, &rif_key, @bitSizeOf(@TypeOf(rif_key)));
+        _ = aes.aes_crypt_ecb(&aes_ctx, aes.AES_DECRYPT, &rif.encrypted_account_keyring_index, &decrypted_account_keyring_index);
+
+        // The last four bytes are the actual index
+        const keyring_index = std.mem.readInt(u32, &decrypted_account_keyring_index[12..][0..4].*, endian);
+
+        // This is likely a decryption issue, bad key maybe?
+        if (keyring_index >= act_dat.primary_key_table.len)
+            return error.RifKeyIndexOutOfBounds;
+
+        break :blk act_dat.primary_key_table[keyring_index];
+    };
+
+    // Encrypt the constant IDPS key with the console's IDPS
+    const idps_key = blk: {
+        var idps_key: [0x10]u8 = undefined;
+        _ = aes.aes_setkey_enc(&aes_ctx, &idps, @bitSizeOf(@TypeOf(idps)));
+        _ = aes.aes_crypt_ecb(&aes_ctx, aes.AES_ENCRYPT, &idps_const_key, &idps_key);
+        break :blk idps_key;
+    };
+
+    // Decrypt the account key with the IDPS key to get the Klicensee key
+    const klicensee_key = blk: {
+        var klicensee_key: [0x10]u8 = undefined;
+        _ = aes.aes_setkey_dec(&aes_ctx, &idps_key, @bitSizeOf(@TypeOf(idps_key)));
+        _ = aes.aes_crypt_ecb(&aes_ctx, aes.AES_DECRYPT, &act_dat_key, &klicensee_key);
+        break :blk klicensee_key;
+    };
+
+    // Decrypt the Klicensee
+    var klicensee: [0x10]u8 = undefined;
+    _ = aes.aes_setkey_dec(&aes_ctx, &klicensee_key, @bitSizeOf(@TypeOf(klicensee_key)));
+    _ = aes.aes_crypt_ecb(&aes_ctx, aes.AES_DECRYPT, &rif.encrypted_rif_key, &klicensee);
+    return klicensee;
 }

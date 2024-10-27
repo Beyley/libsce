@@ -24,6 +24,10 @@ pub const setup_cmd: CommandT = .{
                 .{ "self_path", "The path to the SELF file." },
                 .{ "out_path", "The path to output the ELF file to." },
                 .{ "rap_path", "An optional path to a RAP file to use for decryption." },
+                .{ "rif_path", "An optional path to a RIF file to use for decrypting NPDRM content." },
+                .{ "act_dat_path", "An optional path to an ACT.DAT file to use for decrypting the RIF file." },
+                .{ "idps_path", "An optional path to an IDPS file to use for decrypting the ACT.DAT key." },
+                .{ "license_endianness", "The endianness to use when reading the license files." },
                 .{ "system_keys_path", "The path to the system keys" },
                 .{ "npdrm_keys_path", "The path to the NPDRM keys" },
             },
@@ -34,6 +38,10 @@ pub const setup_cmd: CommandT = .{
             .sub_descriptions = &.{
                 .{ "self_path", "The path to the SELF file." },
                 .{ "rap_path", "An optional path to a RAP file to use for decryption." },
+                .{ "rif_path", "An optional path to a RIF file to use for decrypting NPDRM content." },
+                .{ "act_dat_path", "An optional path to an ACT.DAT file to use for decrypting the RIF file." },
+                .{ "idps_path", "An optional path to an IDPS file to use for decrypting the ACT.DAT key." },
+                .{ "license_endianness", "The endianness to use when reading the license files." },
                 .{ "system_keys_path", "The path to the system keys" },
                 .{ "npdrm_keys_path", "The path to the NPDRM keys" },
             },
@@ -45,6 +53,10 @@ const ExtractOptions = struct {
     self_path: []const u8,
     out_path: ?[]const u8 = "out.elf",
     rap_path: ?[]const u8 = null,
+    rif_path: ?[]const u8 = null,
+    act_dat_path: ?[]const u8 = null,
+    idps_path: ?[]const u8 = null,
+    license_endianness: ?std.builtin.Endian = null,
     system_keys_path: ?[]const u8 = "keys/system_keys.json",
     npdrm_keys_path: ?[]const u8 = "keys/npdrm_keys.json",
 };
@@ -52,9 +64,51 @@ const ExtractOptions = struct {
 const InfoOptions = struct {
     self_path: []const u8,
     rap_path: ?[]const u8 = null,
+    rif_path: ?[]const u8 = null,
+    act_dat_path: ?[]const u8 = null,
+    idps_path: ?[]const u8 = null,
+    license_endianness: ?std.builtin.Endian = null,
     system_keys_path: ?[]const u8 = "keys/system_keys.json",
     npdrm_keys_path: ?[]const u8 = "keys/npdrm_keys.json",
 };
+
+fn readLicenseData(rap_path: ?[]const u8, rif_path: ?[]const u8, act_dat_path: ?[]const u8, idps_path: ?[]const u8, license_endianness: ?std.builtin.Endian) !certified_file.LicenseData {
+    if (rap_path) |rap_file_path| {
+        var rap: [0x10]u8 = undefined;
+        if ((try std.fs.cwd().readFile(rap_file_path, &rap)).len != rap.len)
+            return error.BadRapFile;
+        return .{ .rap = rap };
+    } else {
+        const endianness = license_endianness orelse return error.MissingLicenseEndianness;
+
+        const rif = rif_blk: {
+            const rif_file = try std.fs.cwd().openFile(rif_path orelse return error.MissingRifPath, .{});
+            defer rif_file.close();
+
+            break :rif_blk try sce.RightsInformationFile.read(rif_file.reader(), endianness);
+        };
+        const act_dat = act_dat_blk: {
+            const act_dat_file = try std.fs.cwd().openFile(act_dat_path orelse return error.MissingActDatPath, .{});
+            defer act_dat_file.close();
+
+            break :act_dat_blk try sce.ActivationData.read(act_dat_file.reader(), endianness);
+        };
+        const idps = idps_blk: {
+            var idps: [0x10]u8 = undefined;
+            if ((try std.fs.cwd().readFile(idps_path orelse return error.MissingIdpsPath, &idps)).len != idps.len)
+                return error.BadIdpsFile;
+            break :idps_blk idps;
+        };
+
+        return .{
+            .rif = .{
+                .rif = rif,
+                .act_dat = act_dat,
+                .idps = idps,
+            },
+        };
+    }
+}
 
 fn extract(allocator: std.mem.Allocator, options: ExtractOptions) !void {
     const self_data = try std.fs.cwd().readFileAlloc(allocator, options.self_path, std.math.maxInt(usize));
@@ -72,7 +126,15 @@ fn extract(allocator: std.mem.Allocator, options: ExtractOptions) !void {
     var npdrm_keys = try npdrm_keyset.read(allocator, npdrmKeysJson);
     defer npdrm_keys.deinit();
 
-    var read_certified_file = try certified_file.read(allocator, self_data, options.rap_path, system_keys, npdrm_keys);
+    const license_data = try readLicenseData(
+        options.rap_path,
+        options.rif_path,
+        options.act_dat_path,
+        options.idps_path,
+        options.license_endianness,
+    );
+
+    var read_certified_file = try certified_file.read(allocator, self_data, license_data, system_keys, npdrm_keys);
     defer read_certified_file.deinit(allocator);
 
     if (read_certified_file != .full and read_certified_file != .fake) {
@@ -102,7 +164,15 @@ fn printInfo(allocator: std.mem.Allocator, options: InfoOptions) !void {
     var npdrm_keys = try npdrm_keyset.read(allocator, npdrmKeysJson);
     defer npdrm_keys.deinit();
 
-    const read_certified_file = try certified_file.read(allocator, self_data, options.rap_path, system_keys, npdrm_keys);
+    const license_data = try readLicenseData(
+        options.rap_path,
+        options.rif_path,
+        options.act_dat_path,
+        options.idps_path,
+        options.license_endianness,
+    );
+
+    const read_certified_file = try certified_file.read(allocator, self_data, license_data, system_keys, npdrm_keys);
     defer read_certified_file.deinit(allocator);
 
     const stdout = std.io.getStdOut().writer();
