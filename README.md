@@ -12,6 +12,7 @@ A library to decrypt, decompress, and disassemble files used by various Sony sys
 - [x] fSELF extraction
 - [x] Remove `unreachable`/`panic` from as many places as possible
 - [ ] (f)SELF/CF creation/encryption
+- [ ] Verbose logging
 
 ## TODO: selftool
 
@@ -23,3 +24,4 @@ A library to decrypt, decompress, and disassemble files used by various Sony sys
 - [x] Extract NPDRM SELF content IDs
 - [ ] Unpack (f)SELF files
 - [ ] Pack (f)SELF files
+- [ ] Logger callback
