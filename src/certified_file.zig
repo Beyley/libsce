@@ -508,7 +508,7 @@ pub fn read(
         .revision = header.key_revision,
         .self_type = self.program_identification_header.program_type,
     }) orelse {
-        log.err("Missing system key for revision {d} and self type {s}, possibly corrupt CF file?", .{ header.key_revision, @tagName(self.program_identification_header.program_type) });
+        log.warn("Missing system key for revision {d} and self type {s}, possibly corrupt CF file?", .{ header.key_revision, @tagName(self.program_identification_header.program_type) });
         return .{ .missing_system_key = .{
             .header = header,
             .contents = .{ .signed_elf = self },
