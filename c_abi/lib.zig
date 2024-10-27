@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const sce = @import("sce");
 
 const LibSce = @This();
@@ -8,7 +9,17 @@ const ErrorType = i32;
 const NoError: ErrorType = -1;
 const NoContentIdError: ErrorType = -2;
 
+const log = std.log.scoped(.libsce);
+
 gpa: GPA = .{},
+
+const LogCallback = fn (scope: [*:0]const u8, level: u32, message: [*:0]const u8) callconv(.C) void;
+
+var log_callback: ?*const LogCallback = null;
+
+export fn libsce_set_log_callback(callback: *const LogCallback) void {
+    log_callback = callback;
+}
 
 /// Create's an instance of libsce
 export fn libsce_create(out: **LibSce) ErrorType {
@@ -18,6 +29,27 @@ export fn libsce_create(out: **LibSce) ErrorType {
 
     return NoError;
 }
+
+pub fn logFn(
+    comptime message_level: std.log.Level,
+    comptime scope: @Type(.enum_literal),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    if (log_callback) |log_fn| {
+        var buf: [4096:0]u8 = undefined;
+        const message = std.fmt.bufPrintZ(&buf, format, args) catch return;
+
+        log_fn(@tagName(scope), @intFromEnum(message_level), message);
+    } else {
+        std.log.defaultLog(message_level, scope, format, args);
+    }
+}
+
+pub const std_options: std.Options = .{
+    .logFn = logFn,
+    .log_level = if (builtin.mode == .Debug) .debug else .info,
+};
 
 /// Destroy's an instance of libsce
 export fn libsce_destroy(libsce: *LibSce) ErrorType {

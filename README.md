@@ -2,6 +2,11 @@
 
 A library to decrypt, decompress, and disassemble files used by various Sony systems.
 
+## Compiling
+
+- Download a recent version of Zig (tested working with `0.14.0-dev.2050+4adf63aef`)
+- Run `zig build` in the root of the repository
+
 ## Supported formats
 
 - SELF Certified File (PS3)
@@ -24,4 +29,4 @@ A library to decrypt, decompress, and disassemble files used by various Sony sys
 - [x] Extract NPDRM SELF content IDs
 - [ ] Unpack (f)SELF files
 - [ ] Pack (f)SELF files
-- [ ] Logger callback
+- [x] Logger callback
