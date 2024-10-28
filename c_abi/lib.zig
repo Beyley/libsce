@@ -4,33 +4,28 @@ const sce = @import("sce");
 
 const LibSce = @This();
 const GPA = std.heap.GeneralPurposeAllocator(.{});
+const log = std.log.scoped(.libsce);
+const LogCallback = fn (scope: [*:0]const u8, level: u32, message: [*:0]const u8) callconv(.C) void;
 
 const ErrorType = i32;
 const NoError: ErrorType = -1;
 const NoContentIdError: ErrorType = -2;
 
-const log = std.log.scoped(.libsce);
+const Bool32 = enum(u32) {
+    false = 0,
+    true = 1,
 
-gpa: GPA = .{},
-npdrm_keyset: sce.npdrm_keyset.KeySet,
-system_keyset: sce.system_keyset.KeySet,
-
-const LogCallback = fn (scope: [*:0]const u8, level: u32, message: [*:0]const u8) callconv(.C) void;
+    pub fn init(val: bool) Bool32 {
+        return if (val) .true else .false;
+    }
+};
 
 var log_callback: ?*const LogCallback = null;
 
-export fn libsce_set_log_callback(callback: *const LogCallback) void {
-    log_callback = callback;
-}
-
-/// Create's an instance of libsce
-export fn libsce_create(out: **LibSce) ErrorType {
-    out.* = init() catch |err| {
-        return @intFromError(err);
-    };
-
-    return NoError;
-}
+pub const std_options: std.Options = .{
+    .logFn = logFn,
+    .log_level = if (builtin.mode == .Debug) .debug else .info,
+};
 
 pub fn logFn(
     comptime message_level: std.log.Level,
@@ -48,10 +43,46 @@ pub fn logFn(
     }
 }
 
-pub const std_options: std.Options = .{
-    .logFn = logFn,
-    .log_level = if (builtin.mode == .Debug) .debug else .info,
-};
+gpa: GPA = .{},
+npdrm_keyset: sce.npdrm_keyset.KeySet,
+system_keyset: sce.system_keyset.KeySet,
+
+export fn libsce_set_log_callback(callback: *const LogCallback) void {
+    log_callback = callback;
+}
+
+/// Create's an instance of libsce
+export fn libsce_create(out: **LibSce) ErrorType {
+    out.* = init() catch |err| {
+        return @intFromError(err);
+    };
+
+    return NoError;
+}
+
+fn init() !*LibSce {
+    var gpa: GPA = .{};
+    errdefer _ = gpa.deinit();
+
+    const allocator = gpa.allocator();
+
+    const libsce = try allocator.create(LibSce);
+    errdefer allocator.destroy(libsce);
+
+    var npdrm_keyset = try sce.npdrm_keyset.read(allocator, @embedFile("npdrm_keys_file"));
+    errdefer npdrm_keyset.deinit();
+
+    var system_keyset = try sce.system_keyset.read(allocator, @embedFile("system_keys_file"));
+    errdefer system_keyset.deinit();
+
+    libsce.* = .{
+        .gpa = gpa,
+        .npdrm_keyset = npdrm_keyset,
+        .system_keyset = system_keyset,
+    };
+
+    return libsce;
+}
 
 /// Destroy's an instance of libsce
 export fn libsce_destroy(libsce: *LibSce) ErrorType {
@@ -72,11 +103,7 @@ export fn libsce_destroy(libsce: *LibSce) ErrorType {
 
 /// Get's the content ID of the passed certified file-wrapped SELF
 export fn libsce_get_content_id(libsce: *LibSce, cf_data_ptr: [*]u8, cf_data_len: usize, out_ptr: *sce.ContentId) ErrorType {
-    const allocator = libsce.gpa.allocator();
-
-    const cf_data = cf_data_ptr[0..cf_data_len];
-
-    const content_id = libsce.getContentId(allocator, cf_data) catch |err| {
+    const content_id = libsce.getContentId(cf_data_ptr[0..cf_data_len]) catch |err| {
         return @intFromError(err);
     };
 
@@ -86,16 +113,12 @@ export fn libsce_get_content_id(libsce: *LibSce, cf_data_ptr: [*]u8, cf_data_len
         return NoError;
     }
 
-    return @intFromError(error.NoContentId);
+    return NoContentIdError;
 }
 
-export fn libsce_error_name(err: ErrorType) [*:0]const u8 {
-    if (err == NoError) return "No Error";
+fn getContentId(libsce: *LibSce, cf_data: []u8) !?sce.ContentId {
+    const allocator = libsce.gpa.allocator();
 
-    return @errorName(@errorFromInt(@as(std.meta.Int(.unsigned, @bitSizeOf(anyerror)), @intCast(err))));
-}
-
-fn getContentId(libsce: LibSce, allocator: std.mem.Allocator, cf_data: []u8) !?sce.ContentId {
     // Read the certified file
     const certified_file = try sce.certified_file.read(allocator, cf_data, .none, libsce.system_keyset, libsce.npdrm_keyset, true);
     defer certified_file.deinit(allocator);
@@ -125,26 +148,46 @@ fn getContentId(libsce: LibSce, allocator: std.mem.Allocator, cf_data: []u8) !?s
     return null;
 }
 
-fn init() !*LibSce {
-    var gpa: GPA = .{};
-    errdefer _ = gpa.deinit();
+export fn libsce_is_self_npdrm(libsce: *LibSce, cf_data_ptr: [*]u8, cf_data_len: usize, out_ptr: *Bool32) ErrorType {
+    out_ptr.* = Bool32.init(libsce.isEbootNpdrm(cf_data_ptr[0..cf_data_len]) catch |err| {
+        return @intFromError(err);
+    });
 
-    const allocator = gpa.allocator();
+    return NoError;
+}
 
-    const libsce = try allocator.create(LibSce);
-    errdefer allocator.destroy(libsce);
+fn isEbootNpdrm(libsce: *LibSce, cf_data: []u8) !bool {
+    const allocator = libsce.gpa.allocator();
 
-    var npdrm_keyset = try sce.npdrm_keyset.read(allocator, @embedFile("npdrm_keys_file"));
-    errdefer npdrm_keyset.deinit();
+    // Read the certified file
+    const certified_file = try sce.certified_file.read(allocator, cf_data, .none, libsce.system_keyset, libsce.npdrm_keyset, true);
+    defer certified_file.deinit(allocator);
 
-    var system_keyset = try sce.system_keyset.read(allocator, @embedFile("system_keys_file"));
-    errdefer system_keyset.deinit();
+    switch (certified_file) {
+        inline else => |read| {
+            // Pull the SELF contents
+            const contents: sce.certified_file.Contents = read.contents;
 
-    libsce.* = .{
-        .gpa = gpa,
-        .npdrm_keyset = npdrm_keyset,
-        .system_keyset = system_keyset,
-    };
+            // If the contents are not a signed ELF, error out
+            if (contents != .signed_elf)
+                return error.NotSignedElf;
 
-    return libsce;
+            const self = contents.signed_elf;
+
+            return switch (self.program_identification_header.program_type) {
+                .application => false,
+                .npdrm_application => true,
+                else => {
+                    log.err("Unable to handle program type of {s}", .{@tagName(self.program_identification_header.program_type)});
+                    return error.UnableToHandleProgramType;
+                },
+            };
+        },
+    }
+}
+
+export fn libsce_error_name(err: ErrorType) [*:0]const u8 {
+    if (err == NoError) return "No Error";
+
+    return @errorName(@errorFromInt(@as(std.meta.Int(.unsigned, @bitSizeOf(anyerror)), @intCast(err))));
 }
