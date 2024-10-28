@@ -73,6 +73,8 @@ const InfoOptions = struct {
 };
 
 fn readLicenseData(rap_path: ?[]const u8, rif_path: ?[]const u8, act_dat_path: ?[]const u8, idps_path: ?[]const u8, license_endianness: ?std.builtin.Endian) !certified_file.LicenseData {
+    if (rap_path == null and rif_path == null and act_dat_path == null and idps_path == null) return .none;
+
     if (rap_path) |rap_file_path| {
         var rap: [0x10]u8 = undefined;
         if ((try std.fs.cwd().readFile(rap_file_path, &rap)).len != rap.len)
