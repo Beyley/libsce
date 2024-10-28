@@ -30,3 +30,4 @@ A library to decrypt, decompress, and disassemble files used by various Sony sys
 - [ ] Unpack (f)SELF files
 - [ ] Pack (f)SELF files
 - [x] Logger callback
+- [ ] Automated publishing of libsce binaries into a .NET runtime folder structure
