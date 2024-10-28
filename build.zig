@@ -328,10 +328,10 @@ fn getDotnetRuntimePath(b: *std.Build, target: std.Target) []const u8 {
         else => @panic("unknown arch, sorry"),
     };
     const final_name = switch (target.os.tag) {
-        .linux => "libscetool.so",
-        .windows => "scetool.dll",
-        .macos => "libscetool.dylib",
-        .ios => "libscetool.a", // we build static libraries on iOS
+        .linux => "libsce.so",
+        .windows => "sce.dll",
+        .macos => "libsce.dylib",
+        .ios => "libsce.a", // we build static libraries on iOS
         else => @panic("unknown os, sorry"),
     };
 
