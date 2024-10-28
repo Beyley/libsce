@@ -114,7 +114,7 @@ fn writeElfInternal(
             try output_stream.seekTo(@byteSwap(program_headers[i].p_offset));
 
             if (segment_header.offset > std.math.maxInt(usize) or segment_header.size > std.math.maxInt(usize)) {
-                log.err("Failed to write ELF segment {d}, segment offset ({d}) or size ({d}) is invalid", .{ segment_header.offset, segment_header.size });
+                log.err("Failed to write ELF segment {d}, segment offset ({d}) or size ({d}) is invalid", .{ i, segment_header.offset, segment_header.size });
                 return Error.InvalidPosOrSizeForPlatform;
             }
 
@@ -139,7 +139,7 @@ fn writeElfInternal(
                 try output_stream.seekTo(@byteSwap(program_headers[segment_header.segment_id].p_offset));
 
                 if (segment_header.segment_offset > std.math.maxInt(usize) or segment_header.segment_size > std.math.maxInt(usize)) {
-                    log.err("Failed to write ELF segment {d}, segment offset ({d}) or size ({d}) is invalid", .{ segment_header.offset, segment_header.size });
+                    log.err("Failed to write ELF segment {d}, segment offset ({d}) or size ({d}) is invalid", .{ i, segment_header.segment_offset, segment_header.segment_size });
                     return Error.InvalidPosOrSizeForPlatform;
                 }
 

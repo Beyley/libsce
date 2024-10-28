@@ -27,6 +27,7 @@ pub const Error = error{
     UnsupportedSignatureType,
     UnsupportedAes128CbcCfbSegment,
     InvalidEncryptionRootHeaderPadding,
+    InvalidPosOrSizeForPlatform,
 } || std.fs.File.Reader.ReadEnumError || std.fs.File.OpenError || Self.Error || npdrm_keyset.Error;
 
 pub const Version = enum(u32) {

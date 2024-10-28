@@ -14,6 +14,7 @@ pub const Error = error{
     InvalidElfEndian,
     InvalidElfMagic,
     InvalidElfVersion,
+    InvalidPosOrSizeForPlatform,
 } || std.fs.File.Reader.ReadEnumError || std.mem.Allocator.Error || sce.Error || std.meta.IntToEnumError;
 
 /// aka self header
