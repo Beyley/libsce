@@ -95,6 +95,7 @@ export fn libsce_destroy(libsce: *LibSce) ErrorType {
     allocator.destroy(libsce);
 
     if (gpa.deinit() == .leak) {
+        log.err("Memory leak encountered in libsce, this is non-fatal, but should be reported!", .{});
         return @intFromError(error.MemoryLeak);
     }
 
@@ -129,8 +130,10 @@ fn getContentId(libsce: *LibSce, cf_data: []u8) !?sce.ContentId {
             const contents: sce.certified_file.Contents = read.contents;
 
             // If the contents are not a signed ELF, error out
-            if (contents != .signed_elf)
+            if (contents != .signed_elf) {
+                log.err("Unable to handle CF with contents of {s}", .{@tagName(contents)});
                 return error.NotSignedElf;
+            }
 
             const self = contents.signed_elf;
 
@@ -169,8 +172,10 @@ fn isEbootNpdrm(libsce: *LibSce, cf_data: []u8) !bool {
             const contents: sce.certified_file.Contents = read.contents;
 
             // If the contents are not a signed ELF, error out
-            if (contents != .signed_elf)
+            if (contents != .signed_elf) {
+                log.err("Unable to handle CF with contents of {s}", .{@tagName(contents)});
                 return error.NotSignedElf;
+            }
 
             const self = contents.signed_elf;
 
