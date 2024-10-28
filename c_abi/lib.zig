@@ -12,6 +12,8 @@ const NoContentIdError: ErrorType = -2;
 const log = std.log.scoped(.libsce);
 
 gpa: GPA = .{},
+npdrm_keyset: sce.npdrm_keyset.KeySet,
+system_keyset: sce.system_keyset.KeySet,
 
 const LogCallback = fn (scope: [*:0]const u8, level: u32, message: [*:0]const u8) callconv(.C) void;
 
@@ -56,6 +58,9 @@ export fn libsce_destroy(libsce: *LibSce) ErrorType {
     var gpa = libsce.gpa;
     const allocator = gpa.allocator();
 
+    libsce.npdrm_keyset.deinit();
+    libsce.system_keyset.deinit();
+
     allocator.destroy(libsce);
 
     if (gpa.deinit() == .leak) {
@@ -71,7 +76,7 @@ export fn libsce_get_content_id(libsce: *LibSce, cf_data_ptr: [*]u8, cf_data_len
 
     const cf_data = cf_data_ptr[0..cf_data_len];
 
-    const content_id = getContentId(allocator, cf_data) catch |err| {
+    const content_id = libsce.getContentId(allocator, cf_data) catch |err| {
         return @intFromError(err);
     };
 
@@ -90,14 +95,9 @@ export fn libsce_error_name(err: ErrorType) [*:0]const u8 {
     return @errorName(@errorFromInt(@as(std.meta.Int(.unsigned, @bitSizeOf(anyerror)), @intCast(err))));
 }
 
-fn getContentId(allocator: std.mem.Allocator, cf_data: []u8) !?sce.ContentId {
-    var system_keys = sce.system_keyset.KeySet.init(allocator);
-    defer system_keys.deinit();
-    var npdrm_keys = sce.npdrm_keyset.KeySet.init(allocator);
-    defer npdrm_keys.deinit();
-
+fn getContentId(libsce: LibSce, allocator: std.mem.Allocator, cf_data: []u8) !?sce.ContentId {
     // Read the certified file
-    const certified_file = try sce.certified_file.read(allocator, cf_data, .none, system_keys, npdrm_keys);
+    const certified_file = try sce.certified_file.read(allocator, cf_data, .none, libsce.system_keyset, libsce.npdrm_keyset, true);
     defer certified_file.deinit(allocator);
 
     switch (certified_file) {
@@ -134,8 +134,16 @@ fn init() !*LibSce {
     const libsce = try allocator.create(LibSce);
     errdefer allocator.destroy(libsce);
 
+    var npdrm_keyset = try sce.npdrm_keyset.read(allocator, @embedFile("npdrm_keys_file"));
+    errdefer npdrm_keyset.deinit();
+
+    var system_keyset = try sce.system_keyset.read(allocator, @embedFile("system_keys_file"));
+    errdefer system_keyset.deinit();
+
     libsce.* = .{
         .gpa = gpa,
+        .npdrm_keyset = npdrm_keyset,
+        .system_keyset = system_keyset,
     };
 
     return libsce;

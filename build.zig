@@ -49,6 +49,9 @@ fn createLibSceCAbi(
     });
     libsce_c_abi.root_module.addImport("sce", libsce);
 
+    libsce_c_abi.root_module.addAnonymousImport("npdrm_keys_file", .{ .root_source_file = b.path("keys/npdrm_keys.json") });
+    libsce_c_abi.root_module.addAnonymousImport("system_keys_file", .{ .root_source_file = b.path("keys/system_keys.json") });
+
     return libsce_c_abi;
 }
 

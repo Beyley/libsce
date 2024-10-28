@@ -134,7 +134,7 @@ fn extract(allocator: std.mem.Allocator, options: ExtractOptions) !void {
         options.license_endianness,
     );
 
-    var read_certified_file = try certified_file.read(allocator, self_data, license_data, system_keys, npdrm_keys);
+    var read_certified_file = try certified_file.read(allocator, self_data, license_data, system_keys, npdrm_keys, false);
     defer read_certified_file.deinit(allocator);
 
     if (read_certified_file != .full and read_certified_file != .fake) {
@@ -172,7 +172,7 @@ fn printInfo(allocator: std.mem.Allocator, options: InfoOptions) !void {
         options.license_endianness,
     );
 
-    const read_certified_file = try certified_file.read(allocator, self_data, license_data, system_keys, npdrm_keys);
+    const read_certified_file = try certified_file.read(allocator, self_data, license_data, system_keys, npdrm_keys, false);
     defer read_certified_file.deinit(allocator);
 
     const stdout = std.io.getStdOut().writer();

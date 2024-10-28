@@ -1,6 +1,8 @@
 .zig-cache/
 zig-out/
-keys/
 bins/
 *.bin
 *.elf
+/keys/*
+!/keys/npdrm_keys.json
+!/keys/system_keys.json

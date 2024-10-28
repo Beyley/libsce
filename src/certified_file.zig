@@ -470,6 +470,7 @@ pub fn read(
     license_data: LicenseData,
     system_keys: system_keyset.KeySet,
     npdrm_keys: npdrm_keyset.KeySet,
+    only_read_header: bool,
 ) Error!CertifiedFile {
     var stream = std.io.fixedBufferStream(cf_data);
 
@@ -492,6 +493,16 @@ pub fn read(
     errdefer self.deinit(allocator);
 
     log.info("Read SELF data", .{});
+
+    if (only_read_header) {
+        log.info("only_read_header specified, returning now that our work is done", .{});
+        return .{
+            .header_only = .{
+                .header = header,
+                .contents = .{ .signed_elf = self },
+            },
+        };
+    }
 
     // If this is a fake certified file, none of the following contents are present, and there's no encryption
     if (header.key_revision == 0x8000) {
@@ -672,22 +683,16 @@ pub const CertifiedFile = union(enum) {
         }
     };
 
-    /// A partially read certified file, returned when a key is missing
-    pub const MissingKey = struct {
-        header: Header,
-        contents: Contents,
-    };
-
-    /// A partially read certified file, returned when a key is missing
-    pub const Fake = struct {
+    pub const Minimal = struct {
         header: Header,
         contents: Contents,
     };
 
     full: Full,
-    fake: Fake,
-    missing_system_key: MissingKey,
-    missing_npdrm_key: MissingKey,
+    fake: Minimal,
+    header_only: Minimal,
+    missing_system_key: Minimal,
+    missing_npdrm_key: Minimal,
 
     pub fn deinit(self: CertifiedFile, allocator: std.mem.Allocator) void {
         switch (self) {
@@ -697,7 +702,7 @@ pub const CertifiedFile = union(enum) {
                 allocator.free(full.optional_headers);
                 allocator.free(full.keys);
             },
-            inline .missing_system_key, .missing_npdrm_key, .fake => |missing_key| {
+            inline .header_only, .missing_system_key, .missing_npdrm_key, .fake => |missing_key| {
                 missing_key.contents.deinit(allocator);
             },
         }
