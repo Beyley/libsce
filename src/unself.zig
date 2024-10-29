@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const sce = @import("sce.zig");
 const certified_file = sce.certified_file;
@@ -103,6 +104,14 @@ fn writeElfInternal(
     log.info("Wrote {d} program headers", .{self.elf_header.phnum});
 
     const program_headers = std.mem.bytesAsSlice(PhdrType, program_headers_data);
+    if (builtin.cpu.arch.endian() != self.elf_header.endian)
+        for (program_headers) |*program_header| {
+            var aligned_program_header = program_header.*;
+
+            std.mem.byteSwapAllFields(PhdrType, &aligned_program_header);
+
+            program_header.* = aligned_program_header;
+        };
 
     // Write the program data
     if (fake) {
@@ -110,8 +119,7 @@ fn writeElfInternal(
         for (self.segment_extended_headers, 0..) |segment_header, i| {
             // Flush before seeking
             try buffered_writer.flush();
-            // NOTE: we byte-swap here because we are directly reading in the program headers from the file as memory, we are not properly parsing
-            try output_stream.seekTo(@byteSwap(program_headers[i].p_offset));
+            try output_stream.seekTo(program_headers[i].p_offset);
 
             if (segment_header.offset > std.math.maxInt(usize) or segment_header.size > std.math.maxInt(usize)) {
                 log.err("Failed to write ELF segment {d}, segment offset ({d}) or size ({d}) is invalid", .{ i, segment_header.offset, segment_header.size });
@@ -135,8 +143,7 @@ fn writeElfInternal(
             if (segment_header.segment_type == .phdr) {
                 // Flush before seeking
                 try buffered_writer.flush();
-                // NOTE: we byte-swap here because we are directly reading in the program headers from the file as memory, we are not properly parsing
-                try output_stream.seekTo(@byteSwap(program_headers[segment_header.segment_id].p_offset));
+                try output_stream.seekTo(program_headers[segment_header.segment_id].p_offset);
 
                 if (segment_header.segment_offset > std.math.maxInt(usize) or segment_header.segment_size > std.math.maxInt(usize)) {
                     log.err("Failed to write ELF segment {d}, segment offset ({d}) or size ({d}) is invalid", .{ i, segment_header.segment_offset, segment_header.segment_size });
