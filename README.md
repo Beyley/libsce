@@ -10,6 +10,8 @@ A library to decrypt, decompress, and disassemble files used by various Sony sys
 ## Supported formats
 
 - SELF Certified File (PS3)
+- Rights Information File (PS3)
+- Activation Data (`ACT.DAT`) (PS3)
 
 ## TODO
 

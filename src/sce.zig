@@ -17,8 +17,9 @@ pub const OpenPsid = [0x10]u8;
 
 const log = std.log.scoped(.sce);
 
-// NOTE: The size of this type is not fully known, its documented as u32 in `Ps3Npdrm`, and u16 in the `RightsInformationFile`
+// NOTE: The size of this type is not fully known, its documented as u32 in `Ps3Npdrm`, and u16 in the `RightsInformationFile`. Let's go with u16 and downcast when necessary.
 /// The type of DRM in use.
+///
 /// See https://www.psdevwiki.com/ps3/NPDRM#DRM_Type
 pub const DrmType = enum(u16) {
     /// It does not require any license. Set in SDATA files. This is the official name.
@@ -93,6 +94,7 @@ pub const Rsa2048Signature = struct {
     }
 };
 
+/// See https://www.psdevwiki.com/ps3/SELF_-_SPRX#Supplemental_Header_Table
 pub const SharedSecret = struct {
     shared_secret_0: [0x10]u8,
     klicensee: [0x10]u8,
@@ -114,11 +116,13 @@ pub const SharedSecret = struct {
     }
 };
 
+/// See https://www.psdevwiki.com/ps3/SELF_-_SPRX#Segment_Extended_Header and https://www.psdevwiki.com/ps3/Certified_File#Segment_Certification_Header
 pub const CompressionAlgorithm = enum(u32) {
     plain = 1,
     zlib = 2,
 };
 
+/// See https://www.psdevwiki.com/ps3/index.php?title=Capability_Flags&section=10#Plaintext_Capability
 pub const PlaintextCapability = struct {
     ctrl_flag1: u32,
     unknown2: u32,
@@ -143,6 +147,7 @@ pub const PlaintextCapability = struct {
     }
 };
 
+/// See https://www.psdevwiki.com/ps3/index.php?title=Capability_Flags&section=10#Encrypted_Capability
 pub const EncryptedCapability = struct {
     unknown1: u32,
     unknown2: u32,
@@ -167,6 +172,7 @@ pub const EncryptedCapability = struct {
     }
 };
 
+/// See https://www.psdevwiki.com/ps3/NPDRM#License_Flags
 pub const LicenseFlags = packed struct(u16) {
     normal: bool,
     unknown1: bool,
@@ -187,6 +193,7 @@ pub const LicenseFlags = packed struct(u16) {
 };
 
 /// A file containing a license for a piece of content
+///
 /// See https://wiki.henkaku.xyz/vita/SceNpDrm#RIF and https://www.psdevwiki.com/ps3/RIF
 pub const RightsInformationFile = struct {
     pub const SomeFlag = packed struct(u32) { unknown: u32 };
@@ -283,6 +290,10 @@ pub const RightsInformationFile = struct {
     }
 };
 
+/// An activation file, based on account email and password, the device's IDPS, the platform, and activation type.
+/// Used to decrypt `RightsInformationFile`s and EDAT files.
+///
+/// See https://psdevwiki.com/ps3/ACT.DAT
 pub const ActivationData = struct {
     pub const Type = enum(u16) {
         local = 1,
@@ -338,12 +349,14 @@ pub const ActivationData = struct {
     /// Encrypted RIF keys table
     primary_key_table: [PrimaryKeyTableEntryCount][KeySizeBytes]u8,
     unknown_1: [0x40]u8,
+    /// The user's PSID
     open_psid: OpenPsid,
+    /// Data which depends on content based on the version of the file
     version_specific_data: VersionSpecificData,
     secondary_table: [SecondaryKeyTableEntryCount][KeySizeBytes]u8,
     /// RSA Public Key for RIF type 0 and 1
     rsa_signature: Rsa2048Signature,
-    /// Maybe AES CMAC (0x20 key + 0x20 hash) or AES HMAC.
+    /// Unknown. Maybe AES CMAC (0x20 key + 0x20 hash) or AES HMAC.
     unknown_signature: [0x40]u8,
     /// pub=vsh_pub, ctype=0x02(vsh_curves)
     ecdsa_signature: [0x28]u8,
