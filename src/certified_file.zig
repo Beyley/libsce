@@ -664,7 +664,15 @@ pub fn read(
     };
 }
 
-pub const CertifiedFile = union(enum) {
+pub const CertifiedFile = union(LoadType) {
+    pub const LoadType = enum(u32) {
+        full = 0,
+        fake = 1,
+        header_only = 2,
+        missing_system_key = 3,
+        missing_npdrm_key = 4,
+    };
+
     /// The full read Certified File
     pub const Full = struct {
         header: Header,
@@ -733,6 +741,14 @@ pub const CertifiedFile = union(enum) {
     header_only: Minimal,
     missing_system_key: Minimal,
     missing_npdrm_key: Minimal,
+
+    pub fn contents(self: CertifiedFile) Contents {
+        switch (self) {
+            inline else => |cf| {
+                return cf.contents;
+            },
+        }
+    }
 
     pub fn deinit(self: CertifiedFile, allocator: std.mem.Allocator) void {
         switch (self) {

@@ -99,5 +99,5 @@ export fn libsce_error_name(err: abi.ErrorType) [*:0]const u8 {
 }
 
 comptime {
-    _ = @import("info.zig");
+    _ = @import("Self.zig");
 }
