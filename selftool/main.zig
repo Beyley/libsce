@@ -463,12 +463,12 @@ fn printInfo(allocator: std.mem.Allocator, options: InfoOptions) !void {
             \\- Padding: {d}
             \\
         , .{
-            full_certified_file.certification_header.sign_offset,
-            @tagName(full_certified_file.certification_header.sign_algorithm),
+            full_certified_file.certification_header.signature_offset,
+            @tagName(full_certified_file.certification_header.signature_algorithm),
             full_certified_file.certification_header.cert_entry_num,
             full_certified_file.certification_header.attr_entry_num,
             full_certified_file.certification_header.optional_header_size,
-            full_certified_file.certification_header.pad,
+            full_certified_file.certification_header.padding,
         });
         try stdout.writeByte('\n');
 
@@ -493,8 +493,8 @@ fn printInfo(allocator: std.mem.Allocator, options: InfoOptions) !void {
                 segment_certification_header.segment_size,
                 @tagName(segment_certification_header.segment_type),
                 segment_certification_header.segment_id,
-                @tagName(segment_certification_header.signing_algorithm),
-                segment_certification_header.signing_idx,
+                @tagName(segment_certification_header.signature_algorithm),
+                segment_certification_header.signature_idx,
                 @tagName(segment_certification_header.encryption_algorithm),
                 segment_certification_header.key_idx,
                 segment_certification_header.iv_idx,

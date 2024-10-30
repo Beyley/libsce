@@ -35,6 +35,7 @@ pub const Version = enum(u32) {
     vita = 3,
 };
 
+/// See https://www.psdevwiki.com/ps3/Certified_File#Category
 pub const Category = enum(u16) {
     /// A SELF or SPRX file, both PS3 and Vita
     ///
@@ -153,11 +154,19 @@ pub const LicenseData = union(enum) {
     none: void,
 };
 
+/// Contains the decryption key and IV to decrypt the `CertificationHeader` and certification body (`SegmentCertificationHeader`, the file keys, and the `OptionalHeader` table)
+///
+/// See https://www.psdevwiki.com/ps3/Certified_File#Encryption_Root_Header
+///
 /// aka metadata info
 pub const EncryptionRootHeader = struct {
+    /// The decrypted key to use
     key: [0x10]u8,
+    /// Padding bytes. Always equal to .{0} ** 0x10
     key_pad: [0x10]u8,
+    /// The decrypted IV to use
     iv: [0x10]u8,
+    /// Padding bytes. Always equal to .{0} ** 0x10
     iv_pad: [0x10]u8,
 
     pub fn byteSize(self: EncryptionRootHeader) usize {
@@ -285,14 +294,24 @@ pub const EncryptionRootHeader = struct {
     }
 };
 
+/// Contains the
+///
+/// See https://www.psdevwiki.com/ps3/Certified_File#Certification_Header
+///
 /// aka metadata header
 pub const CertificationHeader = struct {
-    sign_offset: u64,
-    sign_algorithm: SigningAlgorithm,
+    /// The offset in the certified file to where the `Signature` struct is located
+    signature_offset: u64,
+    /// The algorithm used to certify the app
+    signature_algorithm: SigningAlgorithm,
+    /// The amount of `SegmentCertificationHeader`s that are present
     cert_entry_num: u32,
+    /// The amount of keys in the app
     attr_entry_num: u32,
+    /// The size of the optional header table
     optional_header_size: u32,
-    pad: u64,
+    /// Padding
+    padding: u64,
 
     /// Reads a pre-decrypted certification header
     pub fn read(reader: anytype, endian: std.builtin.Endian) Error!CertificationHeader {
@@ -300,12 +319,12 @@ pub const CertificationHeader = struct {
         try reader.readNoEof(&header);
 
         return .{
-            .sign_offset = std.mem.readInt(u64, header[0..0x08], endian),
-            .sign_algorithm = try std.meta.intToEnum(SigningAlgorithm, std.mem.readInt(u32, header[0x08..0x0c], endian)),
+            .signature_offset = std.mem.readInt(u64, header[0..0x08], endian),
+            .signature_algorithm = try std.meta.intToEnum(SigningAlgorithm, std.mem.readInt(u32, header[0x08..0x0c], endian)),
             .cert_entry_num = std.mem.readInt(u32, header[0x0c..0x10], endian),
             .attr_entry_num = std.mem.readInt(u32, header[0x10..0x14], endian),
             .optional_header_size = std.mem.readInt(u32, header[0x14..0x18], endian),
-            .pad = std.mem.readInt(u64, header[0x18..0x20], endian),
+            .padding = std.mem.readInt(u64, header[0x18..0x20], endian),
         };
     }
 };
@@ -318,6 +337,10 @@ pub const SigningAlgorithm = enum(u32) {
     hmac_sha256 = 6,
 };
 
+///
+///
+/// See https://www.psdevwiki.com/ps3/Certified_File#Segment_Certification_Header
+///
 /// aka metadata section header
 pub const SegmentCertificationHeader = struct {
     pub const SegmentType = enum(u32) {
@@ -332,15 +355,24 @@ pub const SegmentCertificationHeader = struct {
         aes128_ctr = 3,
     };
 
+    /// An offset into the certified file where the segment starts
     segment_offset: u64,
+    /// The size of the segment
     segment_size: u64,
+    /// The type of the segment
     segment_type: SegmentType,
+    /// The ID of the segment
     segment_id: u32,
-    signing_algorithm: SigningAlgorithm,
-    signing_idx: u32,
+    /// The signature algorithm used to sign this segment
+    signature_algorithm: SigningAlgorithm,
+    signature_idx: u32,
+    /// The algorithm used to encrypt this segment
     encryption_algorithm: EncryptionAlgorithm,
+    /// The key index used to decrypt this segment
     key_idx: ?u32,
+    /// The IV index used to decrypt this segment
     iv_idx: ?u32,
+    /// The compression algorithm in use for this segment
     compression_algorithm: sce.CompressionAlgorithm,
 
     pub fn byteSize(self: SegmentCertificationHeader) usize {
@@ -366,8 +398,8 @@ pub const SegmentCertificationHeader = struct {
             .segment_size = try reader.readInt(u64, endian),
             .segment_type = try reader.readEnum(SegmentType, endian),
             .segment_id = try reader.readInt(u32, endian),
-            .signing_algorithm = try reader.readEnum(SigningAlgorithm, endian),
-            .signing_idx = try reader.readInt(u32, endian),
+            .signature_algorithm = try reader.readEnum(SigningAlgorithm, endian),
+            .signature_idx = try reader.readInt(u32, endian),
             .encryption_algorithm = try reader.readEnum(EncryptionAlgorithm, endian),
             .key_idx = blk: {
                 const idx = try reader.readInt(u32, endian);
@@ -382,6 +414,9 @@ pub const SegmentCertificationHeader = struct {
     }
 };
 
+/// An optional header providing extra information to the certified file
+///
+/// See https://www.psdevwiki.com/ps3/Certified_File#Optional_Header_Table
 pub const OptionalHeader = union(Type) {
     pub const Type = enum(u32) {
         capability = 1,
@@ -446,6 +481,10 @@ pub const OptionalHeader = union(Type) {
     }
 };
 
+/// Contains the signature used to certify the file.
+/// Signature is calculated upon the decrypted contents from the start of the certified file to `CertificationHeader.signature_offset`
+///
+/// See https://www.psdevwiki.com/ps3/Certified_File#Signature
 pub const Signature = union(SigningAlgorithm) {
     ecdsa160: sce.Ecdsa160Signature,
     hmac_sha1: void,
@@ -454,11 +493,11 @@ pub const Signature = union(SigningAlgorithm) {
     hmac_sha256: void,
 
     pub fn read(reader: anytype, certification_header: CertificationHeader) Error!Signature {
-        return switch (certification_header.sign_algorithm) {
+        return switch (certification_header.signature_algorithm) {
             .ecdsa160 => .{ .ecdsa160 = try sce.Ecdsa160Signature.read(reader) },
             .rsa2048 => .{ .rsa2048 = try sce.Rsa2048Signature.read(reader) },
             else => { // https://www.psdevwiki.com/ps3/Certified_File#Signature
-                log.err("Unsupported signature type {s}", .{@tagName(certification_header.sign_algorithm)});
+                log.err("Unsupported signature type {s}", .{@tagName(certification_header.signature_algorithm)});
                 return Error.UnsupportedSignatureType;
             },
         };
