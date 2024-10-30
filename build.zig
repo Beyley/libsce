@@ -36,7 +36,7 @@ pub fn build(b: *std.Build) !void {
     licensetool_run_step.dependOn(&run_licensetool.step);
 
     const package_targets: []const std.Build.ResolvedTarget = &.{
-        std.Build.resolveTargetQuery(b, std.Target.Query{
+        std.Build.resolveTargetQuery(b, .{
             .abi = .gnu,
             .glibc_version = .{
                 .major = 2,
@@ -46,7 +46,7 @@ pub fn build(b: *std.Build) !void {
             .cpu_arch = .x86_64,
             .os_tag = .linux,
         }),
-        std.Build.resolveTargetQuery(b, std.Target.Query{
+        std.Build.resolveTargetQuery(b, .{
             .abi = .gnu,
             .glibc_version = .{
                 .major = 2,
@@ -56,7 +56,7 @@ pub fn build(b: *std.Build) !void {
             .cpu_arch = .aarch64,
             .os_tag = .linux,
         }),
-        std.Build.resolveTargetQuery(b, std.Target.Query{
+        std.Build.resolveTargetQuery(b, .{
             .abi = .gnueabihf,
             .glibc_version = .{
                 .major = 2,
@@ -66,47 +66,47 @@ pub fn build(b: *std.Build) !void {
             .cpu_arch = .arm,
             .os_tag = .linux,
         }),
-        std.Build.resolveTargetQuery(b, std.Target.Query{
+        std.Build.resolveTargetQuery(b, .{
             .cpu_arch = .aarch64,
             .os_tag = .windows,
         }),
-        std.Build.resolveTargetQuery(b, std.Target.Query{
+        std.Build.resolveTargetQuery(b, .{
             .cpu_arch = .x86_64,
             .os_tag = .windows,
         }),
-        std.Build.resolveTargetQuery(b, std.Target.Query{
+        std.Build.resolveTargetQuery(b, .{
             .cpu_arch = .aarch64,
             .os_tag = .macos,
         }),
-        std.Build.resolveTargetQuery(b, std.Target.Query{
+        std.Build.resolveTargetQuery(b, .{
             .cpu_arch = .x86_64,
             .os_tag = .macos,
         }),
-        std.Build.resolveTargetQuery(b, std.Target.Query{
+        std.Build.resolveTargetQuery(b, .{
             .cpu_arch = .x86_64,
             .os_tag = .linux,
             .abi = .android,
         }),
-        std.Build.resolveTargetQuery(b, std.Target.Query{
+        std.Build.resolveTargetQuery(b, .{
             .cpu_arch = .aarch64,
             .os_tag = .linux,
             .abi = .android,
         }),
-        std.Build.resolveTargetQuery(b, std.Target.Query{
+        std.Build.resolveTargetQuery(b, .{
             .cpu_arch = .arm,
             .os_tag = .linux,
             .abi = .androideabi,
         }),
-        std.Build.resolveTargetQuery(b, std.Target.Query{
+        std.Build.resolveTargetQuery(b, .{
             .cpu_arch = .aarch64,
             .os_tag = .ios,
         }),
-        std.Build.resolveTargetQuery(b, std.Target.Query{
+        std.Build.resolveTargetQuery(b, .{
             .cpu_arch = .x86_64,
             .os_tag = .ios,
             .abi = .simulator,
         }),
-        std.Build.resolveTargetQuery(b, std.Target.Query{
+        std.Build.resolveTargetQuery(b, .{
             .cpu_arch = .aarch64,
             .os_tag = .ios,
             .abi = .simulator,
