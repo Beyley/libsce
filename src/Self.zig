@@ -5,6 +5,7 @@ const sce = @import("sce.zig");
 const Self = @This();
 
 const log = std.log.scoped(.self);
+const fieldSize = sce.fieldSize;
 
 pub const Error = error{
     BadPs3ElfDigestSize,
@@ -17,6 +18,10 @@ pub const Error = error{
     InvalidPosOrSizeForPlatform,
 } || std.fs.File.Reader.ReadEnumError || std.mem.Allocator.Error || sce.Error || std.meta.IntToEnumError;
 
+/// The SELF's header, stored in the Extended Header section of the Certified File
+///
+/// See https://www.psdevwiki.com/ps3/SELF_-_SPRX#Extended_Header
+///
 /// aka self header
 pub const ExtendedHeader = struct {
     pub const Version = enum(u64) {
@@ -84,34 +89,45 @@ pub const ExtendedHeader = struct {
     }
 };
 
+/// See https://www.psdevwiki.com/ps3/Program_Authority_ID
+pub const ProgramAuthorityId = packed struct(u64) {
+    pub const ConsoleGeneration = enum(u4) {
+        ps3 = 1,
+        vita = 2,
+        ps4 = 3,
+    };
+
+    /// The program ID
+    program_id: u52,
+    /// The territory ID this program is for
+    territory_id: u8,
+    /// The console generation this program is for
+    console_generation: ConsoleGeneration,
+};
+
+/// See https://www.psdevwiki.com/ps3/Program_Vender_Id
+///
+/// aka vendor id
+pub const ProgramVenderId = packed struct(u32) {
+    pub const GuestOsId = enum(u16) {
+        none = 0,
+        pme = 1,
+        lv2 = 2,
+        ps2emu = 3,
+        linux = 4,
+        _,
+    };
+
+    guest_os_id: GuestOsId,
+    territory: u16,
+};
+
+/// Contains identification information about the program
+///
+/// See https://www.psdevwiki.com/ps3/SELF_-_SPRX#Program_Identification_Header
+///
 /// aka application info/app info
 pub const ProgramIdentificationHeader = struct {
-    pub const ProgramAuthorityId = packed struct(u64) {
-        pub const ConsoleGeneration = enum(u4) {
-            ps3 = 1,
-            vita = 2,
-            ps4 = 3,
-        };
-
-        program_id: u52,
-        territory_id: u8,
-        console_generation: ConsoleGeneration,
-    };
-
-    pub const VenderId = packed struct(u32) {
-        pub const GuestOsId = enum(u16) {
-            none = 0,
-            pme = 1,
-            lv2 = 2,
-            ps2emu = 3,
-            linux = 4,
-            _,
-        };
-
-        guest_os_id: GuestOsId,
-        territory: u16,
-    };
-
     pub const ProgramType = enum(u32) {
         /// PS4 update pup
         pup = 0,
@@ -154,7 +170,7 @@ pub const ProgramIdentificationHeader = struct {
     /// The program "vender" ID
     ///
     /// aka vendor_id
-    program_vender_id: VenderId,
+    program_vender_id: ProgramVenderId,
     /// The program type of the Self
     ///
     /// aka self_type
@@ -174,8 +190,16 @@ pub const ProgramIdentificationHeader = struct {
     }
 };
 
-pub const SupplementalHeaderTable = struct {
-    pub const SupplementalHeaderType = enum(u32) {
+/// The constant that all PS3/Vita SELF files share: 627CB1808AB938E32C8C091708726A579E2586E4
+pub const ConstantDigest: [0x14]u8 = .{ 0x62, 0x7C, 0xB1, 0x80, 0x8A, 0xB9, 0x38, 0xE3, 0x2C, 0x8C, 0x09, 0x17, 0x08, 0x72, 0x6A, 0x57, 0x9E, 0x25, 0x86, 0xE4 };
+
+/// Non-essential supplemental information about the SELF
+///
+/// See https://www.psdevwiki.com/ps3/SELF_-_SPRX#Supplemental_Header_Table
+///
+/// aka control information
+pub const SupplementalHeader = union(Type) {
+    pub const Type = enum(u32) {
         plaintext_capability = 1,
         ps3_elf_digest = 2,
         ps3_npdrm = 3,
@@ -185,142 +209,187 @@ pub const SupplementalHeaderTable = struct {
         vita_shared_secret = 7,
     };
 
-    pub const SupplementalHeader = union(SupplementalHeaderType) {
-        pub const Ps3ElfDigest = union(enum) {
-            pub const Small = struct {
-                constant_or_elf_digsest: [0x14]u8,
-                padding: [0xc]u8,
-            };
-
-            pub const Large = struct {
-                constant: [0x14]u8,
-                elf_digest: [0x14]u8,
-                required_system_version: u64,
-            };
-
-            small: Small,
-            large: Large,
-
-            pub fn read(reader: anytype, endian: std.builtin.Endian, size: usize) Error!Ps3ElfDigest {
-                return switch (size) {
-                    0x30 => .{ .small = .{
-                        .constant_or_elf_digsest = try reader.readBytesNoEof(0x14),
-                        .padding = try reader.readBytesNoEof(0xc),
-                    } },
-                    0x40 => .{ .large = .{
-                        .constant = try reader.readBytesNoEof(0x14),
-                        .elf_digest = try reader.readBytesNoEof(0x14),
-                        .required_system_version = try reader.readInt(u64, endian),
-                    } },
-                    else => {
-                        log.err("PS3 elf digest header has invalid size {d}", .{size});
-                        return Error.BadPs3ElfDigestSize;
-                    },
-                };
-            }
+    /// Contains digest/hash information about the embedded binary
+    pub const Ps3ElfDigest = union(enum) {
+        pub const Small = struct {
+            constant_or_elf_digsest: [0x14]u8,
+            padding: [0xc]u8,
         };
-        pub const Ps3Npdrm = struct {
-            pub const AppType = enum(u32) {
-                module = 0,
-                executable = 1,
-                disc_game_update_module = 0x20,
-                disc_game_update_executable = 0x21,
-                hdd_game_update_module = 0x30,
-                hdd_game_update_executable = 0x31,
-            };
 
-            version: u32,
-            drm_type: sce.DrmType,
-            app_type: AppType,
-            content_id: sce.ContentId,
-            digest: [0x10]u8,
-            cid_fn_hash: [0x10]u8,
-            header_hash: [0x10]u8,
-            limited_time_start: u64,
-            limited_time_end: u64,
-
-            pub fn read(reader: anytype, endian: std.builtin.Endian) Error!Ps3Npdrm {
-                const magic = try reader.readBytesNoEof(4);
-                if (!std.mem.eql(u8, &magic, "NPD\x00")) {
-                    log.err("PS3 NPDRM supplemental header has invalid magic of {x}", .{magic});
-                    return Error.BadNpdrmMagic;
-                }
-
-                return .{
-                    .version = try reader.readInt(u32, endian),
-                    .drm_type = try std.meta.intToEnum(sce.DrmType, try reader.readInt(u32, endian)), // this is read as a u32 here, but in other places (like the RIF file, its a u16)
-                    .app_type = try reader.readEnum(SupplementalHeader.Ps3Npdrm.AppType, endian),
-                    .content_id = try reader.readBytesNoEof(0x30),
-                    .digest = try reader.readBytesNoEof(0x10),
-                    .cid_fn_hash = try reader.readBytesNoEof(0x10),
-                    .header_hash = try reader.readBytesNoEof(0x10),
-                    .limited_time_start = try reader.readInt(u64, endian),
-                    .limited_time_end = try reader.readInt(u64, endian),
-                };
-            }
-        };
-        pub const VitaElfDigest = struct {
+        pub const Large = struct {
+            /// Same for every PS3/Vita SELF, hardcoded
             constant: [0x14]u8,
-            elf_digest: [0x20]u8,
-            padding: u64,
-            min_required_fw: u32,
-
-            pub fn read(reader: anytype, endian: std.builtin.Endian) Error!VitaElfDigest {
-                return .{
-                    .constant = try reader.readBytesNoEof(0x14),
-                    .elf_digest = try reader.readBytesNoEof(0x20),
-                    .padding = try reader.readInt(u64, endian),
-                    .min_required_fw = try reader.readInt(u32, endian),
-                };
-            }
-        };
-        pub const VitaNpdrm = struct {
-            finalized_flag: u32,
-            drm_type: sce.DrmType,
-            padding: u32,
-            content_id: sce.ContentId,
-            digest: [0x10]u8,
-            padding_78: [0x78]u8,
-            sig: sce.Ecdsa224Signature,
-
-            pub fn read(reader: anytype, endian: std.builtin.Endian) Error!VitaNpdrm {
-                const magic = try reader.readBytesNoEof(4);
-                if (!std.mem.eql(u8, &magic, "\x7FDRM")) {
-                    log.err("Vita NPDRM supplemental header has invalid magic, {x}", .{magic});
-                    return Error.BadVitaNpdrmMagic;
-                }
-
-                return .{
-                    .finalized_flag = try reader.readInt(u32, endian),
-                    .drm_type = try std.meta.intToEnum(sce.DrmType, try reader.readInt(u32, endian)), // this is read as a u32 here, but in other places (like the RIF file, its a u16)
-                    .padding = try reader.readInt(u32, endian),
-                    .content_id = try reader.readBytesNoEof(0x30),
-                    .digest = try reader.readBytesNoEof(0x10),
-                    .padding_78 = try reader.readBytesNoEof(0x78),
-                    .sig = try sce.Ecdsa224Signature.read(reader),
-                };
-            }
-        };
-        pub const VitaBootParam = struct {
-            boot_param: [0x100]u8,
-
-            pub fn read(reader: anytype) Error!VitaBootParam {
-                return .{
-                    .boot_param = try reader.readBytesNoEof(0x100),
-                };
-            }
+            /// A SHA-1 hash of the contained ELF file
+            elf_digest: [0x14]u8,
+            /// The required system version to run the application, in the format of XX.YYYY (decimal, not hexadecimal)
+            required_system_version: u64,
         };
 
-        plaintext_capability: sce.PlaintextCapability,
-        ps3_elf_digest: Ps3ElfDigest,
-        ps3_npdrm: Ps3Npdrm,
-        vita_elf_digest: VitaElfDigest,
-        vita_npdrm: VitaNpdrm,
-        vita_boot_param: VitaBootParam,
-        vita_shared_secret: sce.SharedSecret,
+        small: Small,
+        large: Large,
+
+        pub fn read(reader: anytype, endian: std.builtin.Endian, size: usize) Error!Ps3ElfDigest {
+            return switch (size) {
+                0x30 => .{ .small = .{
+                    .constant_or_elf_digsest = try reader.readBytesNoEof(fieldSize(Small, "constant_or_elf_digsest")),
+                    .padding = try reader.readBytesNoEof(fieldSize(Small, "padding")),
+                } },
+                0x40 => .{ .large = .{
+                    .constant = try reader.readBytesNoEof(fieldSize(Large, "constant")),
+                    .elf_digest = try reader.readBytesNoEof(fieldSize(Large, "elf_digest")),
+                    .required_system_version = try reader.readInt(u64, endian),
+                } },
+                else => {
+                    log.err("PS3 elf digest header has invalid size {d}", .{size});
+                    return Error.BadPs3ElfDigestSize;
+                },
+            };
+        }
+
+        pub fn byteSize(self: Ps3ElfDigest) usize {
+            return switch (self) {
+                .small => 0x30,
+                .large => 0x40,
+            };
+        }
     };
 
-    pub fn read(allocator: std.mem.Allocator, raw_reader: anytype, extended_header: ExtendedHeader, endian: std.builtin.Endian) Error![]SupplementalHeader {
+    /// Contains information about the app's NPDRM signature
+    ///
+    /// aka NPD packet
+    pub const Ps3Npdrm = struct {
+        pub const AppType = enum(u32) {
+            module = 0,
+            executable = 1,
+            disc_game_update_module = 0x20,
+            disc_game_update_executable = 0x21,
+            hdd_game_update_module = 0x30,
+            hdd_game_update_executable = 0x31,
+        };
+
+        /// The version of the NPD packager
+        version: u32,
+        /// The DRM type of the application
+        drm_type: sce.DrmType,
+        /// The NPDRM application type
+        app_type: AppType,
+        /// The content ID of the application
+        content_id: sce.ContentId,
+        /// The application's digest
+        digest: [0x10]u8,
+        /// AES-CMAC hash of the concatenation of Content ID (48 bytes) and EDAT/SELF filename (eg "MINIS.EDAT", "EBOOT.BIN") using the npd_cid_fn_hash_aes_cmac_key
+        cid_fn_hash: [0x10]u8,
+        /// AES CMAC hash of the 0x60 bytes from the beginning of the file using (klicensee XOR npd_header_hash_xor_key) as AES-CMAC key
+        header_hash: [0x10]u8,
+        /// Start of the validity period.
+        limited_time_start: ?u64,
+        /// End of the validity period
+        limited_time_end: ?u64,
+
+        pub fn read(reader: anytype, endian: std.builtin.Endian) Error!Ps3Npdrm {
+            const magic = try reader.readBytesNoEof(4);
+            if (!std.mem.eql(u8, &magic, "NPD\x00")) {
+                log.err("PS3 NPDRM supplemental header has invalid magic of {x}", .{magic});
+                return Error.BadNpdrmMagic;
+            }
+
+            return .{
+                .version = try reader.readInt(u32, endian),
+                .drm_type = try std.meta.intToEnum(sce.DrmType, try reader.readInt(u32, endian)), // this is read as a u32 here, but in other places (like the RIF file, its a u16)
+                .app_type = try reader.readEnum(SupplementalHeader.Ps3Npdrm.AppType, endian),
+                .content_id = try reader.readBytesNoEof(0x30),
+                .digest = try reader.readBytesNoEof(0x10),
+                .cid_fn_hash = try reader.readBytesNoEof(0x10),
+                .header_hash = try reader.readBytesNoEof(0x10),
+                .limited_time_start = blk: {
+                    const time = try reader.readInt(u64, endian);
+
+                    break :blk if (time == 0) null else time;
+                },
+                .limited_time_end = blk: {
+                    const time = try reader.readInt(u64, endian);
+
+                    break :blk if (time == 0) null else time;
+                },
+            };
+        }
+    };
+
+    /// Contains digest/hash information about the program
+    pub const VitaElfDigest = struct {
+        /// Same for every PS3/Vita SELF, hardcoded
+        constant: [0x14]u8,
+        /// SHA-256 of source ELF file
+        elf_digest: [0x20]u8,
+        padding: u64,
+        /// Minimum required firmware to run application, 0x0363 for 3.63, 0xXXYY for (XX.YY)
+        min_required_fw: u32,
+
+        pub fn read(reader: anytype, endian: std.builtin.Endian) Error!VitaElfDigest {
+            return .{
+                .constant = try reader.readBytesNoEof(0x14),
+                .elf_digest = try reader.readBytesNoEof(0x20),
+                .padding = try reader.readInt(u64, endian),
+                .min_required_fw = try reader.readInt(u32, endian),
+            };
+        }
+    };
+
+    /// Contains the program's NPDRM information
+    pub const VitaNpdrm = struct {
+        /// Unknown. It may be version like in NPD. ex: 80 00 00 01
+        finalized_flag: u32,
+        /// The DRM type used for the encrypted sections
+        drm_type: sce.DrmType,
+        padding: u32,
+        /// The content ID of the application
+        content_id: sce.ContentId,
+        /// Unknown. Maybe SHA-1 hash of debug SELF/SPRX created using make_fself_npdrm? Maybe content_id hash?
+        digest: [0x10]u8,
+        padding_78: [0x78]u8,
+        /// Unknown. Maybe signature of PSVita_npdrm_header? Maybe signature of an external NPDRM file?
+        sig: sce.Ecdsa224Signature,
+
+        pub fn read(reader: anytype, endian: std.builtin.Endian) Error!VitaNpdrm {
+            const magic = try reader.readBytesNoEof(4);
+            if (!std.mem.eql(u8, &magic, "\x7FDRM")) {
+                log.err("Vita NPDRM supplemental header has invalid magic, {x}", .{magic});
+                return Error.BadVitaNpdrmMagic;
+            }
+
+            return .{
+                .finalized_flag = try reader.readInt(u32, endian),
+                .drm_type = try std.meta.intToEnum(sce.DrmType, try reader.readInt(u32, endian)), // this is read as a u32 here, but in other places (like the RIF file, its a u16)
+                .padding = try reader.readInt(u32, endian),
+                .content_id = try reader.readBytesNoEof(0x30),
+                .digest = try reader.readBytesNoEof(0x10),
+                .padding_78 = try reader.readBytesNoEof(0x78),
+                .sig = try sce.Ecdsa224Signature.read(reader),
+            };
+        }
+    };
+
+    /// Unknown.
+    pub const VitaBootParam = struct {
+        /// Unknown.
+        boot_param: [0x100]u8,
+
+        pub fn read(reader: anytype) Error!VitaBootParam {
+            return .{
+                .boot_param = try reader.readBytesNoEof(0x100),
+            };
+        }
+    };
+
+    plaintext_capability: sce.PlaintextCapability,
+    ps3_elf_digest: Ps3ElfDigest,
+    ps3_npdrm: Ps3Npdrm,
+    vita_elf_digest: VitaElfDigest,
+    vita_npdrm: VitaNpdrm,
+    vita_boot_param: VitaBootParam,
+    vita_shared_secret: sce.SharedSecret,
+
+    pub fn readTable(allocator: std.mem.Allocator, raw_reader: anytype, extended_header: ExtendedHeader, endian: std.builtin.Endian) Error![]SupplementalHeader {
         var headers = std.ArrayList(SupplementalHeader).init(allocator);
 
         var counting_reader = std.io.countingReader(raw_reader);
@@ -329,7 +398,7 @@ pub const SupplementalHeaderTable = struct {
         while (extended_header.supplemental_header_size > 0) {
             counting_reader.bytes_read = 0;
 
-            const header_type = try reader.readEnum(SupplementalHeaderType, endian);
+            const header_type = try reader.readEnum(SupplementalHeader.Type, endian);
             const size = try reader.readInt(u32, endian);
             const next = (try reader.readInt(u64, endian)) > 0;
 
@@ -356,6 +425,11 @@ pub const SupplementalHeaderTable = struct {
     }
 };
 
+/// Maps each PHDR in the ELF file to the real offset/size in the Certified File
+///
+/// See https://www.psdevwiki.com/ps3/SELF_-_SPRX#Segment_Extended_Header
+///
+/// NOTE: psdevwiki claims this is also for SHDR entries, but that doesn't seem to be the case(?)
 pub const SegmentExtendedHeader = struct {
     pub const Encryption = enum(u64) {
         unrequested = 0,
@@ -363,10 +437,15 @@ pub const SegmentExtendedHeader = struct {
         requested = 2,
     };
 
+    /// Offset to the data in the certified file, from the start
     offset: u64,
+    /// Size of the data in the certified file
     size: u64,
+    /// The compression algorithm in use
     compression: sce.CompressionAlgorithm,
+    /// Unknown. Always seems to be zero.
     unknown: u32,
+    /// The encryption method in use
     encryption: Encryption,
 
     pub fn read(allocator: std.mem.Allocator, reader: anytype, elf_header: std.elf.Header, endianness: std.builtin.Endian) ![]SegmentExtendedHeader {
@@ -406,7 +485,7 @@ pub fn read(self_data: []const u8, stream: anytype, allocator: std.mem.Allocator
     log.info("Read program identification header", .{});
 
     try stream.seekTo(extended_header.supplemental_header_offset);
-    const supplemental_headers = try SupplementalHeaderTable.read(allocator, reader, extended_header, endianness);
+    const supplemental_headers = try SupplementalHeader.readTable(allocator, reader, extended_header, endianness);
     errdefer allocator.free(supplemental_headers);
 
     log.info("Read {d} supplemental headers", .{supplemental_headers.len});
@@ -441,7 +520,7 @@ pub fn read(self_data: []const u8, stream: anytype, allocator: std.mem.Allocator
 
 extended_header: ExtendedHeader,
 program_identification_header: ProgramIdentificationHeader,
-supplemental_headers: []SupplementalHeaderTable.SupplementalHeader,
+supplemental_headers: []SupplementalHeader,
 elf_header: std.elf.Header,
 segment_extended_headers: []SegmentExtendedHeader,
 

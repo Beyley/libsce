@@ -332,8 +332,8 @@ fn printInfo(allocator: std.mem.Allocator, options: InfoOptions) !void {
                                     \\- Digest: {x}
                                     \\- CID FN Hash: {x}
                                     \\- Header Hash: {x}
-                                    \\- Limited Time Start: {d}
-                                    \\- Limited Time End: {d}
+                                    \\- Limited Time Start: {?d}
+                                    \\- Limited Time End: {?d}
                                     \\
                                 , .{
                                     ps3_npdrm.version,

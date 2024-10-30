@@ -46,7 +46,7 @@ pub const DrmType = enum(u16) {
     unknown_ps3 = 0x2000,
 };
 
-fn fieldSize(comptime T: type, comptime field_name: []const u8) comptime_int {
+pub fn fieldSize(comptime T: type, comptime field_name: []const u8) comptime_int {
     return @sizeOf(@FieldType(T, field_name));
 }
 
