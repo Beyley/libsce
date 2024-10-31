@@ -1,6 +1,7 @@
+const std = @import("std");
+
 pub const ErrorType = i32;
 pub const NoError: ErrorType = -1;
-pub const NoContentIdError: ErrorType = -2;
 
 pub const Bool32 = enum(u32) {
     false = 0,
@@ -10,3 +11,9 @@ pub const Bool32 = enum(u32) {
         return if (val) .true else .false;
     }
 };
+
+export fn libsce_error_name(err: ErrorType) [*:0]const u8 {
+    if (err == NoError) return "No Error";
+
+    return @errorName(@errorFromInt(@as(std.meta.Int(.unsigned, @bitSizeOf(anyerror)), @intCast(err))));
+}

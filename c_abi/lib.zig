@@ -5,10 +5,15 @@ const sce = @import("sce");
 const abi = @import("abi.zig");
 
 const LibSce = @This();
-const GPA = std.heap.GeneralPurposeAllocator(.{});
+const GPA = std.heap.GeneralPurposeAllocator(.{ .thread_safe = false });
 const log = std.log.scoped(.libsce_infra);
 
 const LogCallback = fn (scope: [*:0]const u8, level: u32, message: [*:0]const u8) callconv(.C) void;
+
+comptime {
+    _ = @import("Self.zig");
+    _ = @import("abi.zig");
+}
 
 pub const std_options: std.Options = .{
     .logFn = struct {
@@ -23,9 +28,9 @@ pub const std_options: std.Options = .{
                 const message = std.fmt.bufPrintZ(&buf, format, args) catch return;
 
                 log_fn(@tagName(scope), @intFromEnum(message_level), message);
-            } else {
-                std.log.defaultLog(message_level, scope, format, args);
             }
+
+            std.log.defaultLog(message_level, scope, format, args);
         }
     }.logFn,
     .log_level = if (builtin.mode == .Debug) .debug else .info,
@@ -34,10 +39,11 @@ pub const std_options: std.Options = .{
 var log_callback: ?*const LogCallback = null;
 
 gpa: GPA = .{},
+thread_safe_allocator: std.heap.ThreadSafeAllocator,
 npdrm_keyset: sce.npdrm_keyset.KeySet,
 system_keyset: sce.system_keyset.KeySet,
 
-export fn libsce_set_log_callback(callback: *const LogCallback) void {
+export fn libsce_set_log_callback(callback: ?*const LogCallback) void {
     log_callback = callback;
 }
 
@@ -50,40 +56,19 @@ export fn libsce_create(out: **LibSce) abi.ErrorType {
     return abi.NoError;
 }
 
-fn init() !*LibSce {
-    var gpa: GPA = .{};
-    errdefer _ = gpa.deinit();
-
-    const allocator = gpa.allocator();
-
-    const libsce = try allocator.create(LibSce);
-    errdefer allocator.destroy(libsce);
-
-    var npdrm_keyset = try sce.npdrm_keyset.read(allocator, @embedFile("npdrm_keys_file"));
-    errdefer npdrm_keyset.deinit();
-
-    var system_keyset = try sce.system_keyset.read(allocator, @embedFile("system_keys_file"));
-    errdefer system_keyset.deinit();
-
-    libsce.* = .{
-        .gpa = gpa,
-        .npdrm_keyset = npdrm_keyset,
-        .system_keyset = system_keyset,
-    };
-
-    return libsce;
-}
-
 /// Destroy's an instance of libsce
 export fn libsce_destroy(libsce: *LibSce) abi.ErrorType {
-    var gpa = libsce.gpa;
-    const allocator = gpa.allocator();
-
+    // Deinit the objects stored inside
     libsce.npdrm_keyset.deinit();
     libsce.system_keyset.deinit();
 
-    allocator.destroy(libsce);
+    // Copy the GPA to the stack, since we are freeing the data which owns it
+    var gpa = libsce.gpa;
 
+    // Free using the stack-copied GPA
+    gpa.allocator().destroy(libsce);
+
+    // Check for leaks
     if (gpa.deinit() == .leak) {
         log.err("Memory leak encountered in libsce, this is non-fatal, but should be reported!", .{});
         return @intFromError(error.MemoryLeak);
@@ -92,12 +77,39 @@ export fn libsce_destroy(libsce: *LibSce) abi.ErrorType {
     return abi.NoError;
 }
 
-export fn libsce_error_name(err: abi.ErrorType) [*:0]const u8 {
-    if (err == abi.NoError) return "No Error";
+fn init() !*LibSce {
+    const libsce = blk: {
+        // Create a temporary stack-allocated GPA
+        var gpa: GPA = .{};
+        errdefer _ = gpa.deinit();
 
-    return @errorName(@errorFromInt(@as(std.meta.Int(.unsigned, @bitSizeOf(anyerror)), @intCast(err))));
-}
+        const libsce = try gpa.allocator().create(LibSce);
 
-comptime {
-    _ = @import("Self.zig");
+        libsce.gpa = gpa;
+
+        break :blk libsce;
+    };
+    // If there's a failure, copy the GPA to the stack and deinit the owning pointer
+    errdefer {
+        var gpa = libsce.gpa;
+        gpa.allocator().destroy(libsce);
+    }
+
+    // Create an allocator based on the heap-owned GPA
+    const allocator = libsce.gpa.allocator();
+
+    var npdrm_keyset = try sce.npdrm_keyset.read(allocator, @embedFile("npdrm_keys_file"));
+    errdefer npdrm_keyset.deinit();
+
+    var system_keyset = try sce.system_keyset.read(allocator, @embedFile("system_keys_file"));
+    errdefer system_keyset.deinit();
+
+    libsce.* = .{
+        .gpa = libsce.gpa,
+        .npdrm_keyset = npdrm_keyset,
+        .system_keyset = system_keyset,
+        .thread_safe_allocator = .{ .child_allocator = allocator },
+    };
+
+    return libsce;
 }
