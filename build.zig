@@ -171,7 +171,7 @@ fn createLibSceCAbi(
         .name = "sce",
         .target = target,
         .optimize = optimize,
-        .root_source_file = b.path("c_abi/lib.zig"),
+        .root_source_file = b.path("c_abi/LibSce.zig"),
         .pic = true,
     });
     // If a libc file is specified, link libc and set the libc file

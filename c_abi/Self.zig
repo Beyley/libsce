@@ -2,7 +2,7 @@ const std = @import("std");
 const sce = @import("sce");
 
 const abi = @import("abi.zig");
-const LibSce = @import("lib.zig");
+const LibSce = @import("LibSce.zig");
 
 const Self = @This();
 
