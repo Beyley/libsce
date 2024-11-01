@@ -10,6 +10,10 @@ pub const Bool32 = enum(u32) {
     pub fn init(val: bool) Bool32 {
         return if (val) .true else .false;
     }
+
+    pub fn toBool(val: Bool32) bool {
+        return val == .true;
+    }
 };
 
 export fn libsce_error_name(err: ErrorType) [*:0]const u8 {

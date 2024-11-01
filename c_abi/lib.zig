@@ -28,9 +28,9 @@ pub const std_options: std.Options = .{
                 const message = std.fmt.bufPrintZ(&buf, format, args) catch return;
 
                 log_fn(@tagName(scope), @intFromEnum(message_level), message);
+            } else {
+                std.log.defaultLog(message_level, scope, format, args);
             }
-
-            std.log.defaultLog(message_level, scope, format, args);
         }
     }.logFn,
     .log_level = if (builtin.mode == .Debug) .debug else .info,
