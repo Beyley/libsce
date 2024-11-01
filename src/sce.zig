@@ -75,10 +75,11 @@ pub const Ecdsa160Signature = struct {
             .padding = try reader.readBytesNoEof(fieldSize(Ecdsa160Signature, "padding")),
         };
 
-        if (!std.mem.allEqual(u8, &signature.padding, 0)) {
-            log.err("Failed to read ECDSA160 signature, padding has invalid bytes. {x}", .{signature.padding});
-            return Error.InvalidEcdsa160SignaturePadding;
-        }
+        // NOTE: this check is removed because CF files created by scetool may put non-zero bytes here.
+        // if (!std.mem.allEqual(u8, &signature.padding, 0)) {
+        //     log.err("Failed to read ECDSA160 signature, padding has invalid bytes. {x}", .{signature.padding});
+        //     return Error.InvalidEcdsa160SignaturePadding;
+        // }
 
         return signature;
     }
