@@ -1,6 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+const parseTarget = std.Target.Query.parse;
+
 pub fn build(b: *std.Build) !void {
     const install_target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -36,119 +38,35 @@ pub fn build(b: *std.Build) !void {
     licensetool_run_step.dependOn(&run_licensetool.step);
 
     const package_targets: []const std.Build.ResolvedTarget = &.{
-        std.Build.resolveTargetQuery(b, .{
-            .abi = .gnu,
-            .glibc_version = .{
-                .major = 2,
-                .minor = 17,
-                .patch = 0,
-            },
-            .cpu_arch = .x86_64,
-            .os_tag = .linux,
-        }),
-        std.Build.resolveTargetQuery(b, .{
-            .abi = .musl,
-            .cpu_arch = .x86_64,
-            .os_tag = .linux,
-        }),
-        std.Build.resolveTargetQuery(b, .{
-            .abi = .gnu,
-            .glibc_version = .{
-                .major = 2,
-                .minor = 36,
-                .patch = 0,
-            },
-            .cpu_arch = .loongarch64,
-            .os_tag = .linux,
-        }),
-        std.Build.resolveTargetQuery(b, .{
-            .abi = .musl,
-            .cpu_arch = .loongarch64,
-            .os_tag = .linux,
-        }),
-        std.Build.resolveTargetQuery(b, .{
-            .abi = .gnu,
-            .glibc_version = .{
-                .major = 2,
-                .minor = 17,
-                .patch = 0,
-            },
-            .cpu_arch = .aarch64,
-            .os_tag = .linux,
-        }),
-        std.Build.resolveTargetQuery(b, .{
-            .abi = .musl,
-            .cpu_arch = .aarch64,
-            .os_tag = .linux,
-        }),
-        std.Build.resolveTargetQuery(b, .{
-            .abi = .gnueabihf,
-            .glibc_version = .{
-                .major = 2,
-                .minor = 17,
-                .patch = 0,
-            },
-            .cpu_arch = .arm,
-            .os_tag = .linux,
-        }),
-        std.Build.resolveTargetQuery(b, .{
-            .abi = .musleabihf,
-            .cpu_arch = .arm,
-            .os_tag = .linux,
-        }),
-        std.Build.resolveTargetQuery(b, .{
-            .cpu_arch = .aarch64,
-            .os_tag = .windows,
-        }),
-        std.Build.resolveTargetQuery(b, .{
-            .cpu_arch = .x86_64,
-            .os_tag = .windows,
-        }),
-        std.Build.resolveTargetQuery(b, .{
-            .cpu_arch = .aarch64,
-            .os_tag = .macos,
-        }),
-        std.Build.resolveTargetQuery(b, .{
-            .cpu_arch = .x86_64,
-            .os_tag = .macos,
-        }),
-        std.Build.resolveTargetQuery(b, .{
-            .cpu_arch = .x86_64,
-            .os_tag = .linux,
-            .abi = .android,
-        }),
-        std.Build.resolveTargetQuery(b, .{
-            .cpu_arch = .aarch64,
-            .os_tag = .linux,
-            .abi = .android,
-        }),
-        std.Build.resolveTargetQuery(b, .{
-            .cpu_arch = .arm,
-            .os_tag = .linux,
-            .abi = .androideabi,
-        }),
-        std.Build.resolveTargetQuery(b, .{
-            .cpu_arch = .aarch64,
-            .os_tag = .ios,
-        }),
-        std.Build.resolveTargetQuery(b, .{
-            .cpu_arch = .x86_64,
-            .os_tag = .ios,
-            .abi = .simulator,
-        }),
-        std.Build.resolveTargetQuery(b, .{
-            .cpu_arch = .aarch64,
-            .os_tag = .ios,
-            .abi = .simulator,
-        }),
-        std.Build.resolveTargetQuery(b, .{
-            .cpu_arch = .x86_64,
-            .os_tag = .freebsd,
-        }),
-        std.Build.resolveTargetQuery(b, .{
-            .cpu_arch = .x86_64,
-            .os_tag = .haiku,
-        }),
+        std.Build.resolveTargetQuery(b, try parseTarget(.{ .arch_os_abi = "x86_64-linux-gnu.2.17" })),
+        std.Build.resolveTargetQuery(b, try parseTarget(.{ .arch_os_abi = "loongarch64-linux-gnu.2.36" })), // loongarch64 support in GLIBC was added way later
+        std.Build.resolveTargetQuery(b, try parseTarget(.{ .arch_os_abi = "aarch64-linux-gnu.2.17" })),
+        std.Build.resolveTargetQuery(b, try parseTarget(.{ .arch_os_abi = "arm-linux-gnueabihf.2.17" })),
+
+        std.Build.resolveTargetQuery(b, try parseTarget(.{ .arch_os_abi = "x86_64-linux-musl" })),
+        std.Build.resolveTargetQuery(b, try parseTarget(.{ .arch_os_abi = "loongarch64-linux-musl" })),
+        std.Build.resolveTargetQuery(b, try parseTarget(.{ .arch_os_abi = "aarch64-linux-musl" })),
+        std.Build.resolveTargetQuery(b, try parseTarget(.{ .arch_os_abi = "arm-linux-musleabihf" })),
+
+        std.Build.resolveTargetQuery(b, try parseTarget(.{ .arch_os_abi = "aarch64-windows" })),
+        std.Build.resolveTargetQuery(b, try parseTarget(.{ .arch_os_abi = "x86_64-windows" })),
+
+        std.Build.resolveTargetQuery(b, try parseTarget(.{ .arch_os_abi = "aarch64-macos" })),
+        std.Build.resolveTargetQuery(b, try parseTarget(.{ .arch_os_abi = "x86_64-macos" })),
+
+        std.Build.resolveTargetQuery(b, try parseTarget(.{ .arch_os_abi = "x86_64-linux-android" })),
+        std.Build.resolveTargetQuery(b, try parseTarget(.{ .arch_os_abi = "aarch64-linux-android" })),
+        std.Build.resolveTargetQuery(b, try parseTarget(.{ .arch_os_abi = "arm-linux-androideabi" })),
+
+        std.Build.resolveTargetQuery(b, try parseTarget(.{ .arch_os_abi = "x86_64-ios" })),
+        std.Build.resolveTargetQuery(b, try parseTarget(.{ .arch_os_abi = "aarch64-ios" })),
+
+        std.Build.resolveTargetQuery(b, try parseTarget(.{ .arch_os_abi = "x86_64-ios-simulator" })),
+        std.Build.resolveTargetQuery(b, try parseTarget(.{ .arch_os_abi = "aarch64-ios-simulator" })),
+
+        std.Build.resolveTargetQuery(b, try parseTarget(.{ .arch_os_abi = "x86_64-freebsd" })),
+
+        std.Build.resolveTargetQuery(b, try parseTarget(.{ .arch_os_abi = "x86_64-haiku" })),
     };
 
     const ndk_version: usize = b.option(usize, "ndk_version", "The android NDK version to use when build") orelse 21;
