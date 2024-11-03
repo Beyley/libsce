@@ -47,6 +47,26 @@ pub fn build(b: *std.Build) !void {
             .os_tag = .linux,
         }),
         std.Build.resolveTargetQuery(b, .{
+            .abi = .musl,
+            .cpu_arch = .x86_64,
+            .os_tag = .linux,
+        }),
+        std.Build.resolveTargetQuery(b, .{
+            .abi = .gnu,
+            .glibc_version = .{
+                .major = 2,
+                .minor = 36,
+                .patch = 0,
+            },
+            .cpu_arch = .loongarch64,
+            .os_tag = .linux,
+        }),
+        std.Build.resolveTargetQuery(b, .{
+            .abi = .musl,
+            .cpu_arch = .loongarch64,
+            .os_tag = .linux,
+        }),
+        std.Build.resolveTargetQuery(b, .{
             .abi = .gnu,
             .glibc_version = .{
                 .major = 2,
@@ -57,12 +77,22 @@ pub fn build(b: *std.Build) !void {
             .os_tag = .linux,
         }),
         std.Build.resolveTargetQuery(b, .{
+            .abi = .musl,
+            .cpu_arch = .aarch64,
+            .os_tag = .linux,
+        }),
+        std.Build.resolveTargetQuery(b, .{
             .abi = .gnueabihf,
             .glibc_version = .{
                 .major = 2,
                 .minor = 17,
                 .patch = 0,
             },
+            .cpu_arch = .arm,
+            .os_tag = .linux,
+        }),
+        std.Build.resolveTargetQuery(b, .{
+            .abi = .musleabihf,
             .cpu_arch = .arm,
             .os_tag = .linux,
         }),
@@ -111,6 +141,14 @@ pub fn build(b: *std.Build) !void {
             .os_tag = .ios,
             .abi = .simulator,
         }),
+        std.Build.resolveTargetQuery(b, .{
+            .cpu_arch = .x86_64,
+            .os_tag = .freebsd,
+        }),
+        std.Build.resolveTargetQuery(b, .{
+            .cpu_arch = .x86_64,
+            .os_tag = .haiku,
+        }),
     };
 
     const ndk_version: usize = b.option(usize, "ndk_version", "The android NDK version to use when build") orelse 21;
@@ -125,6 +163,11 @@ pub fn build(b: *std.Build) !void {
     const ios_sdk_root = b.option([]const u8, "ios_sdk_root", "The root of the iOS SDK");
     const ios_simulator_sdk_root = b.option([]const u8, "ios_simulator_sdk_root", "The root of the iOS simulator SDK");
 
+    const freebsd_x86_64_sysroot = b.option([]const u8, "freebsd_x86_64_sysroot", "The root of a FreeBSD x86_64 system");
+
+    const haiku_x86_64_sysroot = b.option([]const u8, "haiku_x86_64_sysroot", "The root of a Haiku x86_64 system");
+    const haiku_x86_64_gcc_dir = b.option([]const u8, "haiku_x86_64_gcc_dir", "The GCC dir for a x86_64 haiku system");
+
     const publish_step = b.step("publish_libsce", "Automatically publishes the libsce C API into a .NET runtime folder structure");
 
     for (package_targets) |package_target| {
@@ -136,6 +179,10 @@ pub fn build(b: *std.Build) !void {
         if (ios_sdk_root == null and target.os.tag == .ios) continue;
         // If we don't have the iOS Simulator SDK, skip iOS Simulator Builds
         if (ios_simulator_sdk_root == null and target.abi == .simulator) continue;
+        // If we don't have a FreeBSD x86_64 sysroot, skip FreeBSD x86_64 builds
+        if (freebsd_x86_64_sysroot == null and target.os.tag == .freebsd and target.cpu.arch == .x86_64) continue;
+        // If we don't have a Haiku x86_64 sysroot, skip Haiku x86_64 builds
+        if ((haiku_x86_64_sysroot == null or haiku_x86_64_gcc_dir == null) and target.os.tag == .haiku and target.cpu.arch == .x86_64) continue;
 
         const libc_file = blk: {
             if (target.isAndroid())
@@ -147,6 +194,12 @@ pub fn build(b: *std.Build) !void {
             if (target.abi == .simulator)
                 break :blk try createIosLibCFile(b, target, ios_simulator_sdk_root.?);
 
+            if (target.os.tag == .freebsd and target.cpu.arch == .x86_64)
+                break :blk try createFreeBsdLibCFile(b, target, freebsd_x86_64_sysroot.?);
+
+            if (target.os.tag == .haiku and target.cpu.arch == .x86_64)
+                break :blk try createHaikuLibCFile(b, target, haiku_x86_64_sysroot.?, haiku_x86_64_gcc_dir.?);
+
             break :blk null;
         };
 
@@ -154,7 +207,7 @@ pub fn build(b: *std.Build) !void {
         const package_libsce = createLibsce(b, package_target, optimize, package_aes);
         const package_libsce_c_abi = createLibSceCAbi(b, package_target, optimize, package_libsce, libc_file);
 
-        const install_step = b.addInstallLibFile(package_libsce_c_abi.getEmittedBin(), getDotnetRuntimePath(b, target));
+        const install_step = b.addInstallFile(package_libsce_c_abi.getEmittedBin(), getDotnetRuntimePath(b, target));
         install_step.step.dependOn(&package_libsce_c_abi.step);
         publish_step.dependOn(&install_step.step);
     }
@@ -319,30 +372,46 @@ fn getDotnetRuntimePath(b: *std.Build, target: std.Target) []const u8 {
         .macos => "osx",
         .windows => "win",
         .ios => "ios",
+        .freebsd => "freebsd",
+        .haiku => "haiku",
         else => @panic("unknown os, sorry"),
     };
     const dotnet_arch = switch (target.cpu.arch) {
         .x86_64 => "x64",
         .arm => "arm",
         .aarch64 => "arm64",
+        .loongarch64 => "loongarch64",
         else => @panic("unknown arch, sorry"),
     };
     const final_name = switch (target.os.tag) {
-        .linux => "libsce.so",
+        .linux, .freebsd, .haiku => "libsce.so",
         .windows => "sce.dll",
         .macos => "libsce.dylib",
         .ios => "libsce.a", // we build static libraries on iOS
         else => @panic("unknown os, sorry"),
     };
+    const dotnet_abi = switch (target.abi) {
+        .gnu, .gnueabihf, .none, .simulator, .android, .androideabi => "",
+        .musl, .musleabihf => "-musl",
+        else => |abi| std.debug.panic("unknown ABI {s}, sorry", .{@tagName(abi)}),
+    };
 
-    return b.fmt("{s}-{s}/native/{s}", .{
+    return b.fmt("{s}{s}-{s}/native/{s}", .{
         dotnet_os,
+        dotnet_abi,
         dotnet_arch,
         final_name,
     });
 }
 
-fn createLibCFile(b: *std.Build, file_name: []const u8, include_dir: []const u8, sys_include_dir: []const u8, crt_dir: []const u8) !std.Build.LazyPath {
+fn createLibCFile(
+    b: *std.Build,
+    file_name: []const u8,
+    include_dir: []const u8,
+    sys_include_dir: []const u8,
+    crt_dir: []const u8,
+    gcc_dir: ?[]const u8,
+) !std.Build.LazyPath {
     var contents = std.ArrayList(u8).init(b.allocator);
     errdefer contents.deinit();
 
@@ -360,7 +429,7 @@ fn createLibCFile(b: *std.Build, file_name: []const u8, include_dir: []const u8,
     try writer.print("crt_dir={s}\n", .{crt_dir});
     try writer.writeAll("msvc_lib_dir=\n");
     try writer.writeAll("kernel32_lib_dir=\n");
-    try writer.writeAll("gcc_dir=\n");
+    try writer.print("gcc_dir={s}\n", .{gcc_dir orelse ""});
 
     const step = b.addWriteFiles();
     return step.add(file_name, contents.items);
@@ -396,6 +465,7 @@ fn createAndroidLibCFile(b: *std.Build, target: std.Target, ndk_root: []const u8
         include_dir,
         system_include_dir,
         lib_dir,
+        null,
     );
 }
 
@@ -412,6 +482,41 @@ fn createIosLibCFile(b: *std.Build, target: std.Target, ios_sdk_root: []const u8
         include_dir,
         include_dir,
         lib_dir,
+        null,
+    );
+}
+
+fn createFreeBsdLibCFile(b: *std.Build, target: std.Target, sysroot: []const u8) !std.Build.LazyPath {
+    const lib_dir = try std.fs.path.resolve(b.allocator, &.{ sysroot, "usr", "lib" });
+    const include_dir = try std.fs.path.resolve(b.allocator, &.{ sysroot, "usr", "include" });
+
+    return try createLibCFile(
+        b,
+        b.fmt(
+            "freebsd-{s}.conf",
+            .{@tagName(target.cpu.arch)},
+        ),
+        include_dir,
+        include_dir,
+        lib_dir,
+        null,
+    );
+}
+
+fn createHaikuLibCFile(b: *std.Build, target: std.Target, sysroot: []const u8, gcc_dir: []const u8) !std.Build.LazyPath {
+    const lib_dir = try std.fs.path.resolve(b.allocator, &.{ sysroot, "develop", "lib" });
+    const include_dir = try std.fs.path.resolve(b.allocator, &.{ sysroot, "develop", "headers" });
+
+    return try createLibCFile(
+        b,
+        b.fmt(
+            "haiku-{s}.conf",
+            .{@tagName(target.cpu.arch)},
+        ),
+        include_dir,
+        include_dir,
+        lib_dir,
+        gcc_dir,
     );
 }
 

@@ -183,7 +183,7 @@ fn extractSelf(self: *Self, allocator: std.mem.Allocator) ![]u8 {
         log.err("SELF file is too big for the current system. Size is {d} bytes.", .{file_size});
     }
 
-    const elf = try allocator.alloc(u8, file_size);
+    const elf = try allocator.alloc(u8, @intCast(file_size));
     errdefer allocator.free(elf);
 
     // Fill the ELF with zeroes, any unused bytes should be zero
