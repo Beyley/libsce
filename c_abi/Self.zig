@@ -6,7 +6,10 @@ const LibSce = @import("LibSce.zig");
 
 const Self = @This();
 
+const log = std.log.scoped(.c_abi_self);
+
 certified_file: sce.certified_file.CertifiedFile,
+cf_data: []u8,
 
 export fn libsce_self_load_rap(
     libsce: *LibSce,
@@ -130,12 +133,72 @@ export fn libsce_self_get_content_id(self: *const Self, out_ptr: *sce.ContentId)
     return .false;
 }
 
+export fn libsce_self_extract_to_elf(libsce: *LibSce, self: *Self, out_ptr_ptr: *[*]u8, out_len_ptr: *usize) abi.ErrorType {
+    const elf = extractSelf(self, libsce.thread_safe_allocator.allocator()) catch |err| {
+        return @intFromError(err);
+    };
+
+    out_ptr_ptr.* = elf.ptr;
+    out_len_ptr.* = elf.len;
+
+    return abi.NoError;
+}
+
+export fn libsce_self_get_digest(self: *Self, out_ptr: *[0x14]u8) abi.Bool32 {
+    const contents = self.certified_file.contents().signed_elf;
+
+    for (contents.supplemental_headers) |supplemental_header| {
+        switch (supplemental_header) {
+            .ps3_elf_digest => |ps3_elf_digest| {
+                switch (ps3_elf_digest) {
+                    .large => |large| {
+                        out_ptr.* = large.elf_digest;
+                        return .true;
+                    },
+                    .small => |small| {
+                        out_ptr.* = small.constant_or_elf_digsest;
+                        return .true;
+                    },
+                }
+            },
+            else => {},
+        }
+    }
+
+    return .false;
+}
+
 export fn libsce_self_destroy(libsce: *LibSce, self: *Self) void {
     const allocator = libsce.thread_safe_allocator.allocator();
 
     self.certified_file.deinit(allocator);
 
     allocator.destroy(self);
+}
+
+fn extractSelf(self: *Self, allocator: std.mem.Allocator) ![]u8 {
+    const file_size = self.certified_file.header().file_size;
+
+    if (file_size > std.math.maxInt(usize)) {
+        log.err("SELF file is too big for the current system. Size is {d} bytes.", .{file_size});
+    }
+
+    const elf = try allocator.alloc(u8, file_size);
+    errdefer allocator.free(elf);
+
+    // Fill the ELF with zeroes, any unused bytes should be zero
+    @memset(elf, 0);
+
+    var stream = std.io.fixedBufferStream(elf);
+
+    try sce.unself.extractSelfToElf(
+        self.cf_data,
+        &self.certified_file,
+        stream.seekableStream(),
+        stream.writer(),
+    );
+
+    return elf;
 }
 
 fn loadSelf(
@@ -155,7 +218,10 @@ fn loadSelf(
     const ret = try allocator.create(Self);
     errdefer allocator.destroy(ret);
 
-    ret.* = .{ .certified_file = certified_file };
+    ret.* = .{
+        .certified_file = certified_file,
+        .cf_data = cf_data,
+    };
 
     return ret;
 }

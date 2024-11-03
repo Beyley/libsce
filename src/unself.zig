@@ -22,6 +22,8 @@ pub fn extractSelfToElf(
     output_stream: anytype,
     output_writer: anytype,
 ) Error!void {
+    // TODO: figure out why the SHA1 hash of our written data does not match the hash provided in the ps3_elf_digest supplemental header
+
     log.info("Extracting SELF file to ELF", .{});
 
     const self, const segment_certification_headers = switch (read_certified_file.*) {
@@ -115,7 +117,7 @@ fn writeElfInternal(
 
     // Write the program data
     if (fake) {
-        // For fake SELF files, pull out the ELF file using
+        // For fake SELF files, pull out the ELF file using the segment extended headers
         for (self.segment_extended_headers, 0..) |segment_header, i| {
             // Flush before seeking
             try buffered_writer.flush();

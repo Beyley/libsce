@@ -742,6 +742,14 @@ pub const CertifiedFile = union(LoadType) {
     missing_system_key: Minimal,
     missing_npdrm_key: Minimal,
 
+    pub fn header(self: CertifiedFile) Header {
+        switch (self) {
+            inline else => |cf| {
+                return cf.header;
+            },
+        }
+    }
+
     pub fn contents(self: CertifiedFile) Contents {
         switch (self) {
             inline else => |cf| {

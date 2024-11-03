@@ -6,7 +6,7 @@ const abi = @import("abi.zig");
 
 const LibSce = @This();
 const GPA = std.heap.GeneralPurposeAllocator(.{ .thread_safe = false });
-const log = std.log.scoped(.libsce_infra);
+const log = std.log.scoped(.c_abi_infra);
 
 const LogCallback = fn (scope: [*:0]const u8, level: u32, message: [*:0]const u8) callconv(.C) void;
 
@@ -54,6 +54,11 @@ export fn libsce_create(out: **LibSce) abi.ErrorType {
     };
 
     return abi.NoError;
+}
+
+/// Frees memory returned by libsce
+export fn libsce_free_memory(libsce: *LibSce, elf_ptr: [*]const u8, elf_len: usize) void {
+    libsce.thread_safe_allocator.allocator().free(elf_ptr[0..elf_len]);
 }
 
 /// Destroy's an instance of libsce
