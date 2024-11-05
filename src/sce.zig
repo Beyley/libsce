@@ -83,6 +83,12 @@ pub const Ecdsa160Signature = struct {
 
         return signature;
     }
+
+    pub fn write(self: Ecdsa160Signature, writer: anytype) Error!void {
+        try writer.writeAll(&self.r);
+        try writer.writeAll(&self.s);
+        try writer.writeAll(&self.padding);
+    }
 };
 
 pub const Rsa2048Signature = struct {
@@ -92,6 +98,10 @@ pub const Rsa2048Signature = struct {
         return .{
             .rsa = try reader.readBytesNoEof(fieldSize(Rsa2048Signature, "rsa")),
         };
+    }
+
+    pub fn write(self: Rsa2048Signature, writer: anytype) Error!void {
+        try writer.writeAll(&self.rsa);
     }
 };
 
@@ -170,6 +180,12 @@ pub const EncryptedCapability = struct {
             .unknown7 = try reader.readInt(u32, endian),
             .unknown8 = try reader.readInt(u32, endian),
         };
+    }
+
+    pub fn byteSize(self: EncryptedCapability) u32 {
+        _ = self;
+
+        return @sizeOf(u32) * 8;
     }
 };
 

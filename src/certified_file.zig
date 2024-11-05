@@ -28,6 +28,7 @@ pub const Error = error{
     UnsupportedAes128CbcCfbSegment,
     InvalidEncryptionRootHeaderPadding,
     InvalidPosOrSizeForPlatform,
+    MissingVitaData,
 } || std.fs.File.Reader.ReadEnumError || std.fs.File.OpenError || Self.Error || npdrm_keyset.Error;
 
 pub const Version = enum(u32) {
@@ -139,6 +140,29 @@ pub const Header = struct {
         };
 
         return header;
+    }
+
+    pub fn write(self: Header, writer: anytype) Error!void {
+        const endian = self.endianness();
+
+        switch (endian) {
+            .big => try writer.writeAll("SCE\x00"),
+            .little => try writer.writeAll("\x00ECS"),
+        }
+
+        try writer.writeInt(std.meta.Tag(Version), @intFromEnum(self.version), endian);
+        try writer.writeInt(u16, self.key_revision, endian);
+        try writer.writeInt(std.meta.Tag(Category), @intFromEnum(self.category), endian);
+        try writer.writeInt(u32, self.extended_header_size, endian);
+        try writer.writeInt(u64, self.file_offset, endian);
+        try writer.writeInt(u64, self.file_size, endian);
+
+        if (self.version == .vita) {
+            const vita_data = self.vita_data orelse return Error.MissingVitaData;
+
+            try writer.writeInt(u64, vita_data.certified_file_size, endian);
+            try writer.writeInt(u64, vita_data.padding, endian);
+        }
     }
 };
 
@@ -292,9 +316,55 @@ pub const EncryptionRootHeader = struct {
 
         return ret;
     }
+
+    pub fn write(
+        self: EncryptionRootHeader,
+        writer: anytype,
+        klic: ?[0x10]u8,
+        key: system_keyset.Key,
+        npdrm_keys: npdrm_keyset.KeySet,
+    ) Error!void {
+        var ctx: aes.aes_context = undefined;
+
+        var header: [0x40]u8 = undefined;
+
+        // Ensure padding is all zeroes
+        if (!std.mem.allEqual(u8, &self.iv_pad, 0) or !std.mem.allEqual(u8, &self.key_pad, 0)) {
+            log.err("Encryption root header padding is not all zeroes! This is likely a logic error when creating the ERH!", .{});
+            return Error.InvalidEncryptionRootHeaderPadding;
+        }
+
+        header[0..0x10].* = self.key;
+        header[0x10..0x20].* = self.key_pad;
+        header[0x20..0x30].* = self.iv;
+        header[0x30..0x40].* = self.iv_pad;
+
+        // Encrypt with the system encryption layer
+        var iv = key.reset_initialization_vector;
+        _ = aes.aes_setkey_enc(&ctx, &key.encryption_round_key, @bitSizeOf(@TypeOf(key.encryption_round_key)));
+        _ = aes.aes_crypt_cbc(&ctx, aes.AES_ENCRYPT, header.len, &iv, &header, &header);
+
+        // If an encrypted NPDRM klicensee is specified, decrypt it, then use it to add the NPDRM encryption layer
+        if (klic != null) {
+            var klicensee = klic.?;
+
+            const klic_key = try npdrm_keyset.getKeyOrError(npdrm_keys, .klic_key, Error.MissingNpdrmKlicKey);
+
+            // Decrypt the klicensee
+            _ = aes.aes_setkey_dec(&ctx, &klic_key, klic_key.len * 8);
+            _ = aes.aes_crypt_ecb(&ctx, aes.AES_DECRYPT, &klicensee, &klicensee);
+
+            // Add the NPDRM encryption layer to the ERH
+            iv = @splat(0);
+            _ = aes.aes_setkey_enc(&ctx, &klicensee, klicensee.len * 8);
+            _ = aes.aes_crypt_cbc(&ctx, aes.AES_ENCRYPT, header.len, &iv, &header, &header);
+        }
+
+        try writer.writeAll(&header);
+    }
 };
 
-/// Contains the
+/// Contains information about the certification/encryption of the data
 ///
 /// See https://www.psdevwiki.com/ps3/Certified_File#Certification_Header
 ///
@@ -315,17 +385,23 @@ pub const CertificationHeader = struct {
 
     /// Reads a pre-decrypted certification header
     pub fn read(reader: anytype, endian: std.builtin.Endian) Error!CertificationHeader {
-        var header: [0x20]u8 = undefined;
-        try reader.readNoEof(&header);
-
         return .{
-            .signature_offset = std.mem.readInt(u64, header[0..0x08], endian),
-            .signature_algorithm = try std.meta.intToEnum(SigningAlgorithm, std.mem.readInt(u32, header[0x08..0x0c], endian)),
-            .cert_entry_num = std.mem.readInt(u32, header[0x0c..0x10], endian),
-            .attr_entry_num = std.mem.readInt(u32, header[0x10..0x14], endian),
-            .optional_header_size = std.mem.readInt(u32, header[0x14..0x18], endian),
-            .padding = std.mem.readInt(u64, header[0x18..0x20], endian),
+            .signature_offset = try reader.readInt(u64, endian),
+            .signature_algorithm = try reader.readEnum(SigningAlgorithm, endian),
+            .cert_entry_num = try reader.readInt(u32, endian),
+            .attr_entry_num = try reader.readInt(u32, endian),
+            .optional_header_size = try reader.readInt(u32, endian),
+            .padding = try reader.readInt(u64, endian),
         };
+    }
+
+    pub fn write(self: CertificationHeader, writer: anytype, endian: std.builtin.Endian) Error!void {
+        try writer.writeInt(u64, self.signature_offset, endian);
+        try writer.writeInt(std.meta.Tag(SigningAlgorithm), @intFromEnum(self.signature_algorithm), endian);
+        try writer.writeInt(u32, self.cert_entry_num, endian);
+        try writer.writeInt(u32, self.attr_entry_num, endian);
+        try writer.writeInt(u32, self.optional_header_size, endian);
+        try writer.writeInt(u64, self.padding, endian);
     }
 };
 
@@ -375,6 +451,8 @@ pub const SegmentCertificationHeader = struct {
     /// The compression algorithm in use for this segment
     compression_algorithm: sce.CompressionAlgorithm,
 
+    const null_idx: u32 = 0xFFFFFFFF;
+
     pub fn byteSize(self: SegmentCertificationHeader) usize {
         _ = self;
 
@@ -392,7 +470,7 @@ pub const SegmentCertificationHeader = struct {
         return headers;
     }
 
-    pub fn readSingle(reader: anytype, endian: std.builtin.Endian) Error!SegmentCertificationHeader {
+    fn readSingle(reader: anytype, endian: std.builtin.Endian) Error!SegmentCertificationHeader {
         return .{
             .segment_offset = try reader.readInt(u64, endian),
             .segment_size = try reader.readInt(u64, endian),
@@ -403,14 +481,32 @@ pub const SegmentCertificationHeader = struct {
             .encryption_algorithm = try reader.readEnum(EncryptionAlgorithm, endian),
             .key_idx = blk: {
                 const idx = try reader.readInt(u32, endian);
-                break :blk if (idx == 0xFFFFFFFF) null else idx;
+                break :blk if (idx == null_idx) null else idx;
             },
             .iv_idx = blk: {
                 const idx = try reader.readInt(u32, endian);
-                break :blk if (idx == 0xFFFFFFFF) null else idx;
+                break :blk if (idx == null_idx) null else idx;
             },
             .compression_algorithm = try reader.readEnum(sce.CompressionAlgorithm, endian),
         };
+    }
+
+    fn writeSingle(self: SegmentCertificationHeader, writer: anytype, endian: std.builtin.Endian) Error!void {
+        try writer.writeInt(u64, self.segment_offset, endian);
+        try writer.writeInt(u64, self.segment_size, endian);
+        try writer.writeInt(std.meta.Tag(SegmentType), @intFromEnum(self.segment_type), endian);
+        try writer.writeInt(u32, self.segment_id, endian);
+        try writer.writeInt(std.meta.Tag(SigningAlgorithm), @intFromEnum(self.signature_algorithm), endian);
+        try writer.writeInt(u32, self.signature_idx, endian);
+        try writer.writeInt(std.meta.Tag(EncryptionAlgorithm), @intFromEnum(self.encryption_algorithm), endian);
+        try writer.writeInt(u32, self.key_idx orelse null_idx, endian);
+        try writer.writeInt(u32, self.iv_idx orelse null_idx, endian);
+    }
+
+    pub fn write(headers: []const SegmentCertificationHeader, writer: anytype, endian: std.builtin.Endian) Error!void {
+        for (headers) |header| {
+            try header.writeSingle(writer, endian);
+        }
     }
 };
 
@@ -431,6 +527,15 @@ pub const OptionalHeader = union(Type) {
     pub const IndividualSeed = [0x100]u8;
     pub const Attribute = [0x20]u8;
 
+    const header_size = @sizeOf(Type) + @sizeOf(u32) + @sizeOf(u64);
+
+    pub fn byteSize(self: OptionalHeader) usize {
+        return switch (self) {
+            .capability => |capability| capability.byteSize(),
+            inline .individual_seed, .attribute => |bytes| bytes.len,
+        };
+    }
+
     pub fn read(raw_reader: anytype, allocator: std.mem.Allocator, certifiction_header: CertificationHeader, endian: std.builtin.Endian) Error![]OptionalHeader {
         if (certifiction_header.optional_header_size == 0) {
             log.info("Optional header size is zero, returning empty array", .{});
@@ -447,8 +552,6 @@ pub const OptionalHeader = union(Type) {
         var to_read: u64 = certifiction_header.optional_header_size;
         while (to_read > 0) : (to_read -= counting_reader.bytes_read) {
             defer counting_reader.bytes_read = 0;
-
-            const header_size = @sizeOf(Type) + @sizeOf(u32) + @sizeOf(u64);
 
             const optional_header_type = try reader.readEnum(Type, endian);
             const size = try reader.readInt(u32, endian) - header_size;
@@ -479,6 +582,30 @@ pub const OptionalHeader = union(Type) {
 
         return optional_headers.toOwnedSlice();
     }
+
+    pub fn write(headers: []const OptionalHeader, raw_writer: anytype, endian: std.builtin.Endian) Error!u64 {
+        var counting_writer = std.io.countingWriter(raw_writer);
+        const writer = counting_writer.writer();
+
+        for (headers, 0..) |header, i| {
+            try writer.writeInt(std.meta.Tag(Type), @intFromEnum(header), endian);
+            try writer.writeInt(u32, header.byteSize() + header_size, endian);
+            try writer.writeInt(u64, if (i < headers.len - 1) 0 else 1, endian);
+
+            const write_start = counting_writer.bytes_written;
+
+            switch (header) {
+                .capability => |capability| try capability.write(writer, endian),
+                inline .individual_seed, .attribute => |bytes| try writer.writeAll(bytes),
+            }
+
+            if (counting_writer.bytes_written - write_start != header.byteSize()) {
+                return Error.OptionalHeaderSizeMismatch;
+            }
+        }
+
+        return counting_writer.bytes_written;
+    }
 };
 
 /// Contains the signature used to certify the file.
@@ -496,11 +623,22 @@ pub const Signature = union(SigningAlgorithm) {
         return switch (certification_header.signature_algorithm) {
             .ecdsa160 => .{ .ecdsa160 = try sce.Ecdsa160Signature.read(reader) },
             .rsa2048 => .{ .rsa2048 = try sce.Rsa2048Signature.read(reader) },
-            else => { // https://www.psdevwiki.com/ps3/Certified_File#Signature
+            // https://www.psdevwiki.com/ps3/Certified_File#Signature
+            else => {
                 log.err("Unsupported signature type {s}", .{@tagName(certification_header.signature_algorithm)});
                 return Error.UnsupportedSignatureType;
             },
         };
+    }
+
+    pub fn write(self: Signature, writer: anytype) Error!Signature {
+        switch (self) {
+            inline .ecdsa160, .rsa2048 => |sig| try sig.write(writer),
+            // https://www.psdevwiki.com/ps3/Certified_File#Signature
+            else => {
+                return Error.UnsupportedSignatureType;
+            },
+        }
     }
 };
 
