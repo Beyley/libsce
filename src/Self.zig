@@ -16,6 +16,8 @@ pub const Error = error{
     InvalidElfMagic,
     InvalidElfVersion,
     InvalidPosOrSizeForPlatform,
+    FailedToReadSupplementalHeader,
+    FailedToWriteSupplementalHeader,
 } || std.fs.File.Reader.ReadEnumError || std.mem.Allocator.Error || sce.Error || std.meta.IntToEnumError;
 
 /// The SELF's header, stored in the Extended Header section of the Certified File
@@ -86,6 +88,19 @@ pub const ExtendedHeader = struct {
             .supplemental_header_size = try reader.readInt(u64, endian),
             .padding = try reader.readInt(u64, endian),
         };
+    }
+
+    pub fn write(self: ExtendedHeader, writer: anytype, endian: std.builtin.Endian) Error!void {
+        try writer.writeInt(std.meta.Tag(Version), @intFromEnum(self.version), endian);
+        try writer.writeInt(u64, self.program_identification_header_offset, endian);
+        try writer.writeInt(u64, self.elf_header_offset, endian);
+        try writer.writeInt(u64, self.program_header_offset, endian);
+        try writer.writeInt(u64, self.section_header_offset, endian);
+        try writer.writeInt(u64, self.segment_extended_header_offset, endian);
+        try writer.writeInt(u64, self.version_header_offset, endian);
+        try writer.writeInt(u64, self.supplemental_header_offset, endian);
+        try writer.writeInt(u64, self.supplemental_header_size, endian);
+        try writer.writeInt(u64, self.padding, endian);
     }
 };
 
@@ -188,6 +203,14 @@ pub const ProgramIdentificationHeader = struct {
             .padding = try reader.readInt(u64, endian),
         };
     }
+
+    pub fn write(self: ProgramIdentificationHeader, writer: anytype, endian: std.builtin.Endian) Error!void {
+        try writer.writeInt(u64, @bitCast(self.program_authority_id), endian);
+        try writer.writeInt(u64, @bitCast(self.program_vender_id), endian);
+        try writer.writeInt(std.meta.Tag(ProgramType), self.program_type, endian);
+        try writer.writeInt(u64, self.program_sceversion, endian);
+        try writer.writeInt(u64, self.padding, endian);
+    }
 };
 
 /// The constant that all PS3/Vita SELF files share: 627CB1808AB938E32C8C091708726A579E2586E4
@@ -246,6 +269,20 @@ pub const SupplementalHeader = union(Type) {
             };
         }
 
+        pub fn write(self: Ps3ElfDigest, writer: anytype, endian: std.builtin.Endian) Error!void {
+            switch (self) {
+                .large => |large| {
+                    try writer.writeAll(&large.constant);
+                    try writer.writeAll(&large.elf_digest);
+                    try writer.writeInt(u64, large.required_system_version, endian);
+                },
+                .small => |small| {
+                    try writer.writeAll(&small.constant_or_elf_digsest);
+                    try writer.writeAll(&small.padding);
+                },
+            }
+        }
+
         pub fn byteSize(self: Ps3ElfDigest) usize {
             return switch (self) {
                 .small => 0x30,
@@ -286,6 +323,14 @@ pub const SupplementalHeader = union(Type) {
         /// End of the validity period
         limited_time_end: ?u64,
 
+        const null_time = 0;
+
+        pub fn byteSize(self: Ps3Npdrm) usize {
+            _ = self;
+
+            return 0x80;
+        }
+
         pub fn read(reader: anytype, endian: std.builtin.Endian) Error!Ps3Npdrm {
             const magic = try reader.readBytesNoEof(4);
             if (!std.mem.eql(u8, &magic, "NPD\x00")) {
@@ -295,7 +340,7 @@ pub const SupplementalHeader = union(Type) {
 
             return .{
                 .version = try reader.readInt(u32, endian),
-                .drm_type = try std.meta.intToEnum(sce.DrmType, try reader.readInt(u32, endian)), // this is read as a u32 here, but in other places (like the RIF file, its a u16)
+                .drm_type = try std.meta.intToEnum(sce.DrmType, try reader.readInt(u32, endian)), // this is read as a u32 here, but in other places, like the RIF file, its a u16
                 .app_type = try reader.readEnum(SupplementalHeader.Ps3Npdrm.AppType, endian),
                 .content_id = try reader.readBytesNoEof(0x30),
                 .digest = try reader.readBytesNoEof(0x10),
@@ -304,14 +349,27 @@ pub const SupplementalHeader = union(Type) {
                 .limited_time_start = blk: {
                     const time = try reader.readInt(u64, endian);
 
-                    break :blk if (time == 0) null else time;
+                    break :blk if (time == null_time) null else time;
                 },
                 .limited_time_end = blk: {
                     const time = try reader.readInt(u64, endian);
 
-                    break :blk if (time == 0) null else time;
+                    break :blk if (time == null_time) null else time;
                 },
             };
+        }
+
+        pub fn write(self: Ps3Npdrm, writer: anytype, endian: std.builtin.Endian) Error!void {
+            try writer.writeAll("NPD\x00");
+            try writer.writeInt(u32, self.version, endian);
+            try writer.writeInt(u32, @intFromEnum(self.drm_type), endian); // this is written as a u32 here, but in other places, like the RIF file, its a u16, so the type is u16, so we specify u32
+            try writer.writeInt(std.meta.Tag(AppType), @intFromEnum(self.app_type), endian);
+            try writer.writeAll(&self.content_id);
+            try writer.writeAll(&self.digest);
+            try writer.writeAll(&self.cid_fn_hash);
+            try writer.writeAll(&self.header_hash);
+            try writer.writeInt(u64, self.limited_time_start orelse null_time, endian);
+            try writer.writeInt(u64, self.limited_time_end orelse null_time, endian);
         }
     };
 
@@ -325,6 +383,11 @@ pub const SupplementalHeader = union(Type) {
         /// Minimum required firmware to run application, 0x0363 for 3.63, 0xXXYY for (XX.YY)
         min_required_fw: u32,
 
+        pub fn byteSize(self: VitaElfDigest) usize {
+            _ = self;
+            return 0x40;
+        }
+
         pub fn read(reader: anytype, endian: std.builtin.Endian) Error!VitaElfDigest {
             return .{
                 .constant = try reader.readBytesNoEof(0x14),
@@ -332,6 +395,13 @@ pub const SupplementalHeader = union(Type) {
                 .padding = try reader.readInt(u64, endian),
                 .min_required_fw = try reader.readInt(u32, endian),
             };
+        }
+
+        pub fn write(self: VitaElfDigest, writer: anytype, endian: std.builtin.Endian) Error!void {
+            try writer.writeAll(&self.constant);
+            try writer.writeAll(&self.elf_digest);
+            try writer.writeInt(u64, self.padding, endian);
+            try writer.writeInt(u32, self.min_required_fw, endian);
         }
     };
 
@@ -350,6 +420,11 @@ pub const SupplementalHeader = union(Type) {
         /// Unknown. Maybe signature of PSVita_npdrm_header? Maybe signature of an external NPDRM file?
         sig: sce.Ecdsa224Signature,
 
+        pub fn byteSize(self: VitaNpdrm) usize {
+            _ = self;
+            return 0x100;
+        }
+
         pub fn read(reader: anytype, endian: std.builtin.Endian) Error!VitaNpdrm {
             const magic = try reader.readBytesNoEof(4);
             if (!std.mem.eql(u8, &magic, "\x7FDRM")) {
@@ -367,6 +442,17 @@ pub const SupplementalHeader = union(Type) {
                 .sig = try sce.Ecdsa224Signature.read(reader),
             };
         }
+
+        pub fn write(self: VitaNpdrm, writer: anytype, endian: std.builtin.Endian) Error!void {
+            try writer.writeAll("\x7FDRM");
+            try writer.writeInt(u32, self.finalized_flag, endian);
+            try writer.writeInt(u32, @intFromEnum(self.drm_type), endian); // this is written as a u32 here, but in other places, like the RIF file, its a u16, so the type is u16, so we specify u32
+            try writer.writeInt(u32, self.padding, endian);
+            try writer.writeAll(&self.content_id);
+            try writer.writeAll(&self.digest);
+            try writer.writeAll(&self.padding_78);
+            try self.sig.write(writer);
+        }
     };
 
     /// Unknown.
@@ -374,10 +460,19 @@ pub const SupplementalHeader = union(Type) {
         /// Unknown.
         boot_param: [0x100]u8,
 
+        pub fn byteSize(self: VitaBootParam) usize {
+            _ = self;
+            return 0x100;
+        }
+
         pub fn read(reader: anytype) Error!VitaBootParam {
             return .{
                 .boot_param = try reader.readBytesNoEof(0x100),
             };
+        }
+
+        pub fn write(self: VitaBootParam, writer: anytype) Error!void {
+            try writer.writeAll(&self.boot_param);
         }
     };
 
@@ -388,6 +483,12 @@ pub const SupplementalHeader = union(Type) {
     vita_npdrm: VitaNpdrm,
     vita_boot_param: VitaBootParam,
     vita_shared_secret: sce.SharedSecret,
+
+    pub fn byteSize(self: SupplementalHeader) usize {
+        return switch (self) {
+            inline else => |header| header.byteSize(),
+        };
+    }
 
     pub fn readTable(allocator: std.mem.Allocator, raw_reader: anytype, extended_header: ExtendedHeader, endian: std.builtin.Endian) Error![]SupplementalHeader {
         var headers = std.ArrayList(SupplementalHeader).init(allocator);
@@ -412,8 +513,10 @@ pub const SupplementalHeader = union(Type) {
                 .vita_shared_secret => .{ .vita_shared_secret = try sce.SharedSecret.read(reader, endian) },
             };
 
-            const to_read = size - counting_reader.bytes_read;
-            try reader.skipBytes(to_read, .{});
+            if (size != counting_reader.bytes_read) {
+                log.err("Failed to read supplemental header, needed to read {d}, but read {d}", .{ size, counting_reader.bytes_read });
+                return Error.FailedToReadSupplementalHeader;
+            }
 
             try headers.append(supplemental_header);
 
@@ -422,6 +525,29 @@ pub const SupplementalHeader = union(Type) {
         }
 
         return try headers.toOwnedSlice();
+    }
+
+    pub fn writeTable(headers: []const SupplementalHeader, raw_writer: anytype, endian: std.builtin.Endian) Error!u64 {
+        var counting_writer = std.io.countingWriter(raw_writer);
+        const writer = counting_writer.writer();
+
+        for (headers, 0..) |header, i| {
+            try writer.writeInt(std.meta.Tag(SupplementalHeader.Type), @intFromEnum(header), endian);
+            try writer.writeInt(u32, header.byteSize());
+            try writer.writeInt(u64, if (i < headers.len - 1) 1 else 0, endian);
+
+            const write_start = counting_writer.bytes_written;
+
+            switch (header) {
+                inline else => |header_data| try header_data.write(writer, endian),
+            }
+
+            if (counting_writer.bytes_written - write_start != header.byteSize()) {
+                return Error.FailedToWriteSupplementalHeader;
+            }
+        }
+
+        return counting_writer.bytes_written;
     }
 };
 
@@ -459,14 +585,28 @@ pub const SegmentExtendedHeader = struct {
         return segment_extended_headers;
     }
 
-    fn readSingle(reader: anytype, endianness: std.builtin.Endian) !SegmentExtendedHeader {
+    fn readSingle(reader: anytype, endian: std.builtin.Endian) !SegmentExtendedHeader {
         return .{
-            .offset = try reader.readInt(u64, endianness),
-            .size = try reader.readInt(u64, endianness),
-            .compression = try reader.readEnum(sce.CompressionAlgorithm, endianness),
-            .unknown = try reader.readInt(u32, endianness),
-            .encryption = try reader.readEnum(Encryption, endianness),
+            .offset = try reader.readInt(u64, endian),
+            .size = try reader.readInt(u64, endian),
+            .compression = try reader.readEnum(sce.CompressionAlgorithm, endian),
+            .unknown = try reader.readInt(u32, endian),
+            .encryption = try reader.readEnum(Encryption, endian),
         };
+    }
+
+    fn writeSingle(self: SegmentExtendedHeader, writer: anytype, endian: std.builtin.Endian) Error!void {
+        try writer.writeInt(u64, self.offset, endian);
+        try writer.writeInt(u64, self.size, endian);
+        try writer.writeInt(std.meta.Tag(sce.CompressionAlgorithm), self.compression, endian);
+        try writer.writeInt(u32, self.unknown, endian);
+        try writer.writeInt(std.meta.Tag(Encryption), self.encryption, endian);
+    }
+
+    pub fn write(headers: []const SegmentExtendedHeader, writer: anytype, endian: std.builtin.Endian) Error!void {
+        for (headers) |header| {
+            try header.writeSingle(writer, endian);
+        }
     }
 };
 

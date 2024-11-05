@@ -61,6 +61,11 @@ pub const Ecdsa224Signature = struct {
             .s = try reader.readBytesNoEof(fieldSize(Ecdsa224Signature, "s")),
         };
     }
+
+    pub fn write(self: Ecdsa224Signature, writer: anytype) Error!void {
+        try writer.writeAll(&self.r);
+        try writer.writeAll(&self.s);
+    }
 };
 
 pub const Ecdsa160Signature = struct {
@@ -112,6 +117,12 @@ pub const SharedSecret = struct {
     shared_secret_2: [0x10]u8,
     shared_secret_3: [4]u32,
 
+    pub fn byteSize(self: SharedSecret) usize {
+        _ = self;
+
+        return 0x40;
+    }
+
     pub fn read(reader: anytype, endian: std.builtin.Endian) Error!SharedSecret {
         return .{
             .shared_secret_0 = try reader.readBytesNoEof(fieldSize(SharedSecret, "shared_secret_0")),
@@ -124,6 +135,15 @@ pub const SharedSecret = struct {
                 try reader.readInt(u32, endian),
             },
         };
+    }
+
+    pub fn write(self: SharedSecret, writer: anytype, endian: std.builtin.Endian) Error!void {
+        try writer.writeAll(&self.shared_secret_0);
+        try writer.writeAll(&self.klicensee);
+        try writer.writeAll(&self.shared_secret_2);
+        for (self.shared_secret_3) |secret| {
+            try writer.writeInt(u32, secret, endian);
+        }
     }
 };
 
@@ -156,6 +176,23 @@ pub const PlaintextCapability = struct {
             .unknown8 = try reader.readInt(u32, endian),
         };
     }
+
+    pub fn write(self: PlaintextCapability, writer: anytype, endian: std.builtin.Endian) Error!void {
+        try writer.writeInt(u32, self.ctrl_flag1, endian);
+        try writer.writeInt(u32, self.unknown2, endian);
+        try writer.writeInt(u32, self.unknown3, endian);
+        try writer.writeInt(u32, self.unknown4, endian);
+        try writer.writeInt(u32, self.unknown5, endian);
+        try writer.writeInt(u32, self.unknown6, endian);
+        try writer.writeInt(u32, self.unknown7, endian);
+        try writer.writeInt(u32, self.unknown8, endian);
+    }
+
+    pub fn byteSize(self: EncryptedCapability) u32 {
+        _ = self;
+
+        return @sizeOf(u32) * 8;
+    }
 };
 
 /// See https://www.psdevwiki.com/ps3/index.php?title=Capability_Flags&section=10#Encrypted_Capability
@@ -180,6 +217,17 @@ pub const EncryptedCapability = struct {
             .unknown7 = try reader.readInt(u32, endian),
             .unknown8 = try reader.readInt(u32, endian),
         };
+    }
+
+    pub fn write(self: EncryptedCapability, writer: anytype, endian: std.builtin.Endian) Error!void {
+        try writer.writeInt(u32, self.unknown1, endian);
+        try writer.writeInt(u32, self.unknown2, endian);
+        try writer.writeInt(u32, self.unknown3, endian);
+        try writer.writeInt(u32, self.unknown4, endian);
+        try writer.writeInt(u32, self.unknown5, endian);
+        try writer.writeInt(u32, self.unknown6, endian);
+        try writer.writeInt(u32, self.unknown7, endian);
+        try writer.writeInt(u32, self.unknown8, endian);
     }
 
     pub fn byteSize(self: EncryptedCapability) u32 {
