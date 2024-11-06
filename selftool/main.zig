@@ -290,6 +290,22 @@ fn printInfo(allocator: std.mem.Allocator, options: InfoOptions) !void {
 
                     try stdout.writeByte('\n');
 
+                    try stdout.print(
+                        \\# SELF Version Header
+                        \\- Sub Header Type: {s}
+                        \\- Present: {}
+                        \\- Size: {d}
+                        \\- Unknown: {x}
+                        \\
+                    , .{
+                        @tagName(self.version_header.sub_header_type),
+                        self.version_header.present,
+                        self.version_header.size,
+                        self.version_header.unknown,
+                    });
+
+                    try stdout.writeByte('\n');
+
                     try stdout.print("# {d} SELF Supplemental Headers \n", .{self.supplemental_headers.len});
 
                     for (self.supplemental_headers, 0..) |supplemental_header, i| {

@@ -15,6 +15,13 @@
     .paths = .{
         "build.zig",
         "build.zig.zon",
-        "src",
+        "selftool/",
+        "src/",
+        "libc/",
+        "licensetool/",
+        "keys/",
+        "c_abi/",
+        "aes/",
+        "LICENSE.md",
     },
 }

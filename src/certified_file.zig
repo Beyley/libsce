@@ -101,12 +101,16 @@ pub const Header = struct {
         };
     }
 
-    /// The size of the header in bytes
-    pub fn byteSize(self: Header) usize {
-        return switch (self.version) {
+    pub fn versionByteSize(version: Version) usize {
+        return switch (version) {
             .ps3 => 0x20,
             .vita => 0x30,
         };
+    }
+
+    /// The size of the header in bytes
+    pub fn byteSize(self: Header) usize {
+        return versionByteSize(self.version);
     }
 
     pub fn read(reader: anytype) Error!Header {

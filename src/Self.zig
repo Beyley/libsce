@@ -287,8 +287,8 @@ pub const SupplementalHeader = union(Type) {
 
         pub fn byteSize(self: Ps3ElfDigest) usize {
             return switch (self) {
-                .small => 0x30,
-                .large => 0x40,
+                .small => 0x20,
+                .large => 0x30,
             };
         }
     };
@@ -546,7 +546,11 @@ pub const SupplementalHeader = union(Type) {
                 inline else => |header_data| try header_data.write(writer, endian),
             }
 
-            if (counting_writer.bytes_written - write_start != header.byteSize()) {
+            log.debug("Writing supplemental header of type {s}", .{@tagName(header)});
+
+            const written = counting_writer.bytes_written - write_start;
+            if (written != header.byteSize()) {
+                log.err("Failed to write supplemental header, wanted to write {d}, wrote {d}", .{ header.byteSize(), written });
                 return Error.FailedToWriteSupplementalHeader;
             }
         }
@@ -555,9 +559,29 @@ pub const SupplementalHeader = union(Type) {
     }
 };
 
+// PS3 specific ELF constants.
+pub const PT_SCE_RELA = 0x60000000;
+pub const PT_SCE_LICINFO_1 = 0x60000001;
+pub const PT_SCE_LICINFO_2 = 0x60000002;
+pub const PT_SCE_DYNLIBDATA = 0x61000000;
+pub const PT_SCE_PROCESS_PARAM = 0x61000001;
+pub const PT_SCE_MODULE_PARAM = 0x61000002;
+pub const PT_SCE_RELRO = 0x61000010;
+pub const PT_SCE_COMMENT = 0x6FFFFF00;
+pub const PT_SCE_LIBVERSION = 0x6FFFFF01;
+pub const PT_SCE_UNK_70000001 = 0x70000001;
+pub const PT_SCE_IOPMOD = 0x70000080;
+pub const PT_SCE_EEMOD = 0x70000090;
+pub const PT_SCE_PSPRELA = 0x700000A0;
+pub const PT_SCE_PSPRELA2 = 0x700000A1;
+pub const PT_SCE_PPURELA = 0x700000A4;
+pub const PT_SCE_SEGSYM = 0x700000A8;
+
 /// Maps each PHDR in the ELF file to the real offset/size in the Certified File
 ///
 /// See https://www.psdevwiki.com/ps3/SELF_-_SPRX#Segment_Extended_Header
+///
+/// aka Section Info
 ///
 /// NOTE: psdevwiki claims this is also for SHDR entries, but that doesn't seem to be the case(?)
 pub const SegmentExtendedHeader = struct {
@@ -578,12 +602,12 @@ pub const SegmentExtendedHeader = struct {
     /// The encryption method in use
     encryption: Encryption,
 
-    pub fn read(allocator: std.mem.Allocator, reader: anytype, elf_header: std.elf.Header, endianness: std.builtin.Endian) ![]SegmentExtendedHeader {
+    pub fn read(allocator: std.mem.Allocator, reader: anytype, elf_header: std.elf.Header, endian: std.builtin.Endian) ![]SegmentExtendedHeader {
         const segment_extended_headers = try allocator.alloc(SegmentExtendedHeader, elf_header.phnum);
         errdefer allocator.free(segment_extended_headers);
 
         for (segment_extended_headers) |*segment_extended_header| {
-            segment_extended_header.* = try readSingle(reader, endianness);
+            segment_extended_header.* = try readSingle(reader, endian);
         }
 
         return segment_extended_headers;
@@ -599,37 +623,64 @@ pub const SegmentExtendedHeader = struct {
         };
     }
 
-    fn writeSingle(self: SegmentExtendedHeader, writer: anytype, endian: std.builtin.Endian) Error!void {
+    pub fn writeSingle(self: SegmentExtendedHeader, writer: anytype, endian: std.builtin.Endian) Error!void {
         try writer.writeInt(u64, self.offset, endian);
         try writer.writeInt(u64, self.size, endian);
         try writer.writeInt(std.meta.Tag(sce.CompressionAlgorithm), self.compression, endian);
         try writer.writeInt(u32, self.unknown, endian);
         try writer.writeInt(std.meta.Tag(Encryption), self.encryption, endian);
     }
+};
 
-    pub fn write(headers: []const SegmentExtendedHeader, writer: anytype, endian: std.builtin.Endian) Error!void {
-        for (headers) |header| {
-            try header.writeSingle(writer, endian);
-        }
+/// See https://www.psdevwiki.com/ps3/SELF_-_SPRX#Version_Header
+pub const VersionHeader = struct {
+    pub const SubHeaderType = enum(u32) {
+        sceversion = 1,
+    };
+
+    sub_header_type: SubHeaderType,
+    present: bool, // u32
+    size: u32,
+    unknown: u32,
+
+    pub fn byteSize() usize {
+        // TODO: psdevwiki claims that the `size` field may not always be 0x10. does the `size` field even refer to the actual version header itself?
+        return 0x10;
+    }
+
+    pub fn read(reader: anytype, endian: std.builtin.Endian) !VersionHeader {
+        return .{
+            .sub_header_type = try reader.readEnum(SubHeaderType, endian),
+            .present = try reader.readInt(u32, endian) != 0,
+            .size = try reader.readInt(u32, endian),
+            .unknown = try reader.readInt(u32, endian),
+        };
+    }
+
+    pub fn write(self: VersionHeader, writer: anytype, endian: std.builtin.Endian) !void {
+        try writer.writeInt(std.meta.Tag(SubHeaderType), self.sub_header_type, endian);
+        try writer.writeInt(u32, @intFromBool(self.present), endian);
+        try writer.writeInt(u32, self.size, endian);
+        try writer.writeInt(u32, self.unknown, endian);
     }
 };
 
-pub fn read(self_data: []const u8, stream: anytype, allocator: std.mem.Allocator, endianness: std.builtin.Endian) Error!Self {
+pub fn read(self_data: []const u8, stream: anytype, allocator: std.mem.Allocator, endian: std.builtin.Endian) Error!Self {
     const reader = stream.reader();
 
     log.info("Reading extended SELF contents", .{});
 
-    const extended_header = try Self.ExtendedHeader.read(reader, endianness);
+    const extended_header = try Self.ExtendedHeader.read(reader, endian);
 
     log.info("Read extended header", .{});
 
     try stream.seekTo(extended_header.program_identification_header_offset);
-    const program_identification_header = try ProgramIdentificationHeader.read(reader, endianness);
+    const program_identification_header = try ProgramIdentificationHeader.read(reader, endian);
 
     log.info("Read program identification header", .{});
 
     try stream.seekTo(extended_header.supplemental_header_offset);
-    const supplemental_headers = try SupplementalHeader.readTable(allocator, reader, extended_header, endianness);
+    const supplemental_headers = try SupplementalHeader.readTable(allocator, reader, extended_header, endian);
     errdefer allocator.free(supplemental_headers);
 
     log.info("Read {d} supplemental headers", .{supplemental_headers.len});
@@ -648,10 +699,13 @@ pub fn read(self_data: []const u8, stream: anytype, allocator: std.mem.Allocator
 
     try stream.seekTo(extended_header.segment_extended_header_offset);
 
-    const segment_extended_headers = try SegmentExtendedHeader.read(allocator, reader, elf_header, endianness);
+    const segment_extended_headers = try SegmentExtendedHeader.read(allocator, reader, elf_header, endian);
     errdefer allocator.free(segment_extended_headers);
 
     log.info("Read {d} segment extended headers", .{segment_extended_headers.len});
+
+    try stream.seekTo(extended_header.version_header_offset);
+    const version_header = try VersionHeader.read(reader, endian);
 
     return .{
         .extended_header = extended_header,
@@ -659,6 +713,7 @@ pub fn read(self_data: []const u8, stream: anytype, allocator: std.mem.Allocator
         .supplemental_headers = supplemental_headers,
         .elf_header = elf_header,
         .segment_extended_headers = segment_extended_headers,
+        .version_header = version_header,
     };
 }
 
@@ -667,6 +722,7 @@ program_identification_header: ProgramIdentificationHeader,
 supplemental_headers: []SupplementalHeader,
 elf_header: std.elf.Header,
 segment_extended_headers: []SegmentExtendedHeader,
+version_header: VersionHeader,
 
 pub fn deinit(self: Self, allocator: std.mem.Allocator) void {
     allocator.free(self.supplemental_headers);
