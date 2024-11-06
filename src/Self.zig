@@ -69,9 +69,7 @@ pub const ExtendedHeader = struct {
     supplemental_header_size: u64,
     padding: u64,
 
-    pub fn byteSize(self: ExtendedHeader) usize {
-        _ = self;
-
+    pub fn byteSize() usize {
         return 0x50;
     }
 
@@ -194,6 +192,10 @@ pub const ProgramIdentificationHeader = struct {
     program_sceversion: u64,
     padding: u64,
 
+    pub fn byteSize() usize {
+        return 0x20;
+    }
+
     pub fn read(reader: anytype, endian: std.builtin.Endian) Error!ProgramIdentificationHeader {
         return .{
             .program_authority_id = @bitCast(try reader.readInt(u64, endian)),
@@ -206,8 +208,8 @@ pub const ProgramIdentificationHeader = struct {
 
     pub fn write(self: ProgramIdentificationHeader, writer: anytype, endian: std.builtin.Endian) Error!void {
         try writer.writeInt(u64, @bitCast(self.program_authority_id), endian);
-        try writer.writeInt(u64, @bitCast(self.program_vender_id), endian);
-        try writer.writeInt(std.meta.Tag(ProgramType), self.program_type, endian);
+        try writer.writeInt(u32, @bitCast(self.program_vender_id), endian);
+        try writer.writeInt(std.meta.Tag(ProgramType), @intFromEnum(self.program_type), endian);
         try writer.writeInt(u64, self.program_sceversion, endian);
         try writer.writeInt(u64, self.padding, endian);
     }
@@ -316,7 +318,7 @@ pub const SupplementalHeader = union(Type) {
         digest: [0x10]u8,
         /// AES-CMAC hash of the concatenation of Content ID (48 bytes) and EDAT/SELF filename (eg "MINIS.EDAT", "EBOOT.BIN") using the npd_cid_fn_hash_aes_cmac_key
         cid_fn_hash: [0x10]u8,
-        /// AES CMAC hash of the 0x60 bytes from the beginning of the file using (klicensee XOR npd_header_hash_xor_key) as AES-CMAC key
+        /// AES-CMAC hash of the 0x60 bytes from the beginning of the NPD packet using (klicensee XOR npd_header_hash_xor_key) as AES-CMAC key
         header_hash: [0x10]u8,
         /// Start of the validity period.
         limited_time_start: ?u64,
@@ -471,7 +473,9 @@ pub const SupplementalHeader = union(Type) {
             };
         }
 
-        pub fn write(self: VitaBootParam, writer: anytype) Error!void {
+        pub fn write(self: VitaBootParam, writer: anytype, endian: std.builtin.Endian) Error!void {
+            _ = endian;
+
             try writer.writeAll(&self.boot_param);
         }
     };
@@ -533,7 +537,7 @@ pub const SupplementalHeader = union(Type) {
 
         for (headers, 0..) |header, i| {
             try writer.writeInt(std.meta.Tag(SupplementalHeader.Type), @intFromEnum(header), endian);
-            try writer.writeInt(u32, header.byteSize());
+            try writer.writeInt(u32, @intCast(header.byteSize()), endian);
             try writer.writeInt(u64, if (i < headers.len - 1) 1 else 0, endian);
 
             const write_start = counting_writer.bytes_written;

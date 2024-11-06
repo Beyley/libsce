@@ -5,6 +5,7 @@ const cova = @import("cova");
 
 const certified_file = sce.certified_file;
 const unself = sce.unself;
+const reself = sce.reself;
 
 const npdrm_keyset = sce.npdrm_keyset;
 const system_keyset = sce.system_keyset;
@@ -32,7 +33,7 @@ pub const setup_cmd: CommandT = .{
                 .{ "npdrm_keys_path", "The path to the NPDRM keys" },
             },
         }),
-        CommandT.from(ExtractOptions, .{
+        CommandT.from(InfoOptions, .{
             .cmd_name = "info",
             .cmd_description = "Displays info about a SELF file",
             .sub_descriptions = &.{
@@ -46,7 +47,16 @@ pub const setup_cmd: CommandT = .{
                 .{ "npdrm_keys_path", "The path to the NPDRM keys" },
             },
         }),
+        CommandT.from(CreateOptions, .{
+            .cmd_name = "create",
+            .cmd_description = "Creates a new SELF file",
+        }),
     },
+};
+
+const CreateOptions = struct {
+    elf_path: []const u8,
+    out_path: ?[]const u8 = "out.self",
 };
 
 const ExtractOptions = struct {
@@ -71,6 +81,18 @@ const InfoOptions = struct {
     system_keys_path: ?[]const u8 = "keys/system_keys.json",
     npdrm_keys_path: ?[]const u8 = "keys/npdrm_keys.json",
 };
+
+fn create(allocator: std.mem.Allocator, options: CreateOptions) !void {
+    const elf = try std.fs.cwd().readFileAlloc(allocator, options.elf_path, std.math.maxInt(usize));
+    defer allocator.free(elf);
+
+    const self = try reself.createSelfFromElf(allocator, elf, .{
+        .content_id = null,
+        .program_type = .application,
+    });
+
+    try std.fs.cwd().writeFile(.{ .sub_path = options.out_path.?, .data = self });
+}
 
 fn readLicenseData(rap_path: ?[]const u8, rif_path: ?[]const u8, act_dat_path: ?[]const u8, idps_path: ?[]const u8, license_endianness: ?std.builtin.Endian) !certified_file.LicenseData {
     if (rap_path == null and rif_path == null and act_dat_path == null and idps_path == null) return .none;
@@ -605,6 +627,11 @@ pub fn main() !u8 {
     if (main_cmd.matchSubCmd("info")) |info_cmd| {
         const extract_args = try info_cmd.to(InfoOptions, .{});
         try printInfo(allocator, extract_args);
+    }
+
+    if (main_cmd.matchSubCmd("create")) |create_cmd| {
+        const create_args = try create_cmd.to(CreateOptions, .{});
+        try create(allocator, create_args);
     }
 
     return 0;

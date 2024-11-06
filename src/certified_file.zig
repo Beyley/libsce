@@ -642,6 +642,8 @@ pub const Signature = union(SigningAlgorithm) {
     }
 };
 
+pub fn write() Error!void {}
+
 pub fn read(
     allocator: std.mem.Allocator,
     cf_data: []u8,

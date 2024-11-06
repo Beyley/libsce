@@ -6,10 +6,11 @@ pub const certified_file = @import("certified_file.zig");
 pub const npdrm_keyset = @import("npdrm_keyset.zig");
 pub const system_keyset = @import("system_keyset.zig");
 pub const unself = @import("unself.zig");
+pub const reself = @import("reself.zig");
 
 pub const Error = error{
     InvalidEcdsa160SignaturePadding,
-} || std.fs.File.Reader.NoEofError;
+} || std.fs.File.Reader.NoEofError || std.mem.Allocator.Error;
 
 pub const ContentId = [0x30]u8;
 
@@ -74,7 +75,7 @@ pub const Ecdsa160Signature = struct {
     padding: [0x06]u8,
 
     pub fn read(reader: anytype) Error!Ecdsa160Signature {
-        const signature = .{
+        const signature: Ecdsa160Signature = .{
             .r = try reader.readBytesNoEof(fieldSize(Ecdsa160Signature, "r")),
             .s = try reader.readBytesNoEof(fieldSize(Ecdsa160Signature, "s")),
             .padding = try reader.readBytesNoEof(fieldSize(Ecdsa160Signature, "padding")),
@@ -188,7 +189,7 @@ pub const PlaintextCapability = struct {
         try writer.writeInt(u32, self.unknown8, endian);
     }
 
-    pub fn byteSize(self: EncryptedCapability) u32 {
+    pub fn byteSize(self: PlaintextCapability) u32 {
         _ = self;
 
         return @sizeOf(u32) * 8;
